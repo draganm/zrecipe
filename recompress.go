@@ -92,7 +92,10 @@ func recompressGzip(p *Params, in *countingReader, out io.Writer, o *RecompressO
 	if err != nil {
 		return err
 	}
-	de := e.(engine.DeflateEngine)
+	de, ok := e.(engine.DeflateEngine)
+	if !ok {
+		return fmt.Errorf("%w: %q is not a %s engine", ErrEngineUnavailable, p.Engine, p.Format)
+	}
 	hdr, err := base64.StdEncoding.DecodeString(p.Gzip.HeaderB64)
 	if err != nil {
 		return fmt.Errorf("%w: gzip header_b64: %v", ErrInvalidParams, err)
@@ -124,7 +127,11 @@ func recompressZstd(p *Params, in io.Reader, out io.Writer, o *RecompressOptions
 	if err != nil {
 		return err
 	}
-	zw, err := e.(engine.ZstdEngine).NewWriter(out, *p.Zstd, p.Uncompressed.Size)
+	ze, ok := e.(engine.ZstdEngine)
+	if !ok {
+		return fmt.Errorf("%w: %q is not a %s engine", ErrEngineUnavailable, p.Engine, p.Format)
+	}
+	zw, err := ze.NewWriter(out, *p.Zstd, p.Uncompressed.Size)
 	if err != nil {
 		return err
 	}
