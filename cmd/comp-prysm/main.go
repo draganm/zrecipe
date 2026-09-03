@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -66,7 +67,7 @@ func newApp() *cli.App {
 
 func detect(c *cli.Context) error {
 	if c.NArg() != 1 {
-		return cli.Exit("usage: comp-prysm detect <file>", 1)
+		return errors.New("usage: comp-prysm detect <file>")
 	}
 	f, err := os.Open(c.Args().Get(0))
 	if err != nil {
@@ -83,7 +84,7 @@ func detect(c *cli.Context) error {
 
 func analyze(c *cli.Context) error {
 	if c.NArg() != 1 {
-		return cli.Exit("usage: comp-prysm analyze [flags] <file>", 1)
+		return errors.New("usage: comp-prysm analyze [flags] <file>")
 	}
 	f, err := os.Open(c.Args().Get(0))
 	if err != nil {
@@ -117,7 +118,7 @@ func analyze(c *cli.Context) error {
 
 func recompress(c *cli.Context) error {
 	if c.NArg() != 2 {
-		return cli.Exit("usage: comp-prysm recompress --params <p.json> <uncompressed> <out>", 1)
+		return errors.New("usage: comp-prysm recompress --params <p.json> <uncompressed> <out>")
 	}
 	pf, err := os.Open(c.String("params"))
 	if err != nil {
@@ -145,6 +146,9 @@ func recompress(c *cli.Context) error {
 		return err
 	}
 	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp.Name(), 0o644); err != nil {
 		return err
 	}
 	return os.Rename(tmp.Name(), outPath)

@@ -67,8 +67,13 @@ func TestAnalyzeThenRecompress(t *testing.T) {
 	if !bytes.Equal(back, file) {
 		t.Fatal("rebuilt file differs")
 	}
-	if _, err := os.Stat(rebuilt + ".tmp"); err == nil {
-		t.Fatal("temp file left behind")
+	if fi, err := os.Stat(rebuilt); err != nil {
+		t.Fatal(err)
+	} else if fi.Mode().Perm() != 0o644 {
+		t.Fatalf("rebuilt file mode = %v, want -rw-r--r--", fi.Mode().Perm())
+	}
+	if matches, _ := filepath.Glob(filepath.Join(dir, "*.tmp")); len(matches) > 0 {
+		t.Fatalf("temp file left behind: %v", matches)
 	}
 }
 
@@ -98,12 +103,36 @@ func TestRecompressFailureLeavesNoOutput(t *testing.T) {
 	if _, err := os.Stat(rebuilt); err == nil {
 		t.Fatal("output must not exist after failure")
 	}
+	if matches, _ := filepath.Glob(filepath.Join(dir, "*.tmp")); len(matches) > 0 {
+		t.Fatalf("temp file left behind: %v", matches)
+	}
 }
 
 func TestEngines(t *testing.T) {
 	out, err := runApp(t, "engines")
 	if err != nil || !strings.Contains(out, "zlib") || !strings.Contains(out, "libzstd") {
 		t.Fatalf("%q %v", out, err)
+	}
+}
+
+// TestUsageErrorsReturnWithoutExiting proves that a wrong-arg-count action
+// returns a plain error instead of a cli.Exit ExitCoder. urfave/cli v2's
+// app.Run handles an ExitCoder by printing it and calling os.Exit directly,
+// which would kill this test process before Run ever returns; a plain error
+// instead propagates normally, so runApp gets it back here.
+func TestUsageErrorsReturnWithoutExiting(t *testing.T) {
+	dir := t.TempDir()
+	_, err := runApp(t, "detect")
+	if err == nil || !strings.Contains(err.Error(), "usage:") {
+		t.Fatalf("detect: %v", err)
+	}
+	_, err = runApp(t, "analyze")
+	if err == nil || !strings.Contains(err.Error(), "usage:") {
+		t.Fatalf("analyze: %v", err)
+	}
+	_, err = runApp(t, "recompress", "--params", filepath.Join(dir, "does-not-exist.json"), "only-one-arg")
+	if err == nil || !strings.Contains(err.Error(), "usage:") {
+		t.Fatalf("recompress: %v", err)
 	}
 }
 
