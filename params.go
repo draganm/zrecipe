@@ -1,13 +1,11 @@
 package compprysm
 
 import (
-	"bytes"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
-	"unsafe"
 )
 
 // ParamsVersion is the schema version written by this package.
@@ -44,16 +42,6 @@ func ReadParams(r io.Reader) (*Params, error) {
 	if err := json.NewDecoder(r).Decode(&p); err != nil {
 		return nil, fmt.Errorf("compprysm: decode params: %w", err)
 	}
-
-	// Reset bytes.Buffer's read offset if r is a bytes.Buffer, so String() still works
-	if bb, ok := r.(*bytes.Buffer); ok {
-		// Access the private 'off' field using unsafe
-		// bytes.Buffer struct has: buf []byte (0), off int (24), lastRead (32)
-		// The 'off' field is at offset 24 in a 64-bit system
-		offPtr := (*int)(unsafe.Pointer(uintptr(unsafe.Pointer(bb)) + unsafe.Sizeof([]byte{})))
-		*offPtr = 0
-	}
-
 	if p.Version != ParamsVersion {
 		return nil, fmt.Errorf("%w: got %d, want %d", ErrParamsVersion, p.Version, ParamsVersion)
 	}

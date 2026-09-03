@@ -31,15 +31,16 @@ func TestReadParamsRoundTrip(t *testing.T) {
 	if err := p.Write(&buf); err != nil {
 		t.Fatal(err)
 	}
-	back, err := ReadParams(&buf)
+	text := buf.String()
+	back, err := ReadParams(strings.NewReader(text))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if *back.Gzip != *p.Gzip || back.Compressed != p.Compressed || back.Engine != p.Engine {
 		t.Fatalf("round trip differs: %+v", back)
 	}
-	if !strings.Contains(buf.String(), "\n  \"format\": \"gzip\"") {
-		t.Fatalf("output is not indented: %s", buf.String())
+	if !strings.Contains(text, "\n  \"format\": \"gzip\"") {
+		t.Fatalf("output is not indented: %s", text)
 	}
 }
 
