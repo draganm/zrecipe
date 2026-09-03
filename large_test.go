@@ -42,15 +42,21 @@ func TestLargeInput(t *testing.T) {
 	var before, after runtime.MemStats
 	runtime.GC()
 	runtime.ReadMemStats(&before)
-	p, err := Analyze(context.Background(), in, &Options{TempDir: dir})
+	p, err := Analyze(context.Background(), in, &Options{TempDir: dir, Parallelism: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
+	runtime.GC()
 	runtime.ReadMemStats(&after)
 	t.Logf("engine %s %+v; heap grew by %d MiB", p.Engine, p.Gzip.DeflateParams, (after.HeapAlloc-before.HeapAlloc)>>20)
 	if p.Uncompressed.Size != size {
 		t.Fatalf("size %d", p.Uncompressed.Size)
 	}
+	const heapBound = 256 << 20
+	if after.HeapInuse >= heapBound {
+		t.Fatalf("HeapInuse = %d MiB, want < %d MiB (spooling and searching a 2 GiB input must not hold it in memory)", after.HeapInuse>>20, heapBound>>20)
+	}
+	t.Logf("HeapInuse after Analyze: %d MiB", after.HeapInuse>>20)
 
 	src, _ := os.Open(unc)
 	defer src.Close()

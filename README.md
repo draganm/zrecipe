@@ -25,9 +25,9 @@ go build ./cmd/comp-prysm
 
 Everything below assumes commands run inside `nix develop` (or
 `nix develop --command ...` from outside it). The library also builds
-without cgo, in which case only the two pure-Go engines, `go-flate` and
-`klauspost-flate`/`klauspost-zstd`, are available and `zlib`/`libzstd` are
-absent from `DefaultEngines()`.
+without cgo, in which case only the three pure-Go engines, `go-flate`,
+`klauspost-flate` and `klauspost-zstd`, are available and `zlib`/`libzstd`
+are absent from `DefaultEngines()`.
 
 ## Library usage
 
@@ -98,12 +98,14 @@ comp-prysm detect archive.tar.gz
 
 # Find parameters that reproduce a compressed file. Params JSON goes to
 # stdout by default, or to --params; --uncompressed additionally writes the
-# decompressed content.
-comp-prysm analyze archive.tar.gz --params params.json --uncompressed archive.tar
+# decompressed content. Flags must come before the positional <file>: this
+# is a urfave/cli v2 limitation (it stops parsing flags at the first
+# positional argument), not a choice made by this tool.
+comp-prysm analyze --params params.json --uncompressed archive.tar archive.tar.gz
 
 # Rebuild the compressed file from params and the uncompressed content.
 # Writes to a temp file next to <out> and renames on success, so a failed
-# run never leaves a partial file at the destination.
+# run never leaves a partial file at the destination. Same flags-first rule.
 comp-prysm recompress --params params.json archive.tar rebuilt.tar.gz
 
 # List the engines compiled into this binary, with their format and version.

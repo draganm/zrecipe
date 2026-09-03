@@ -61,6 +61,23 @@ func TestRecompressInputMismatch(t *testing.T) {
 	}
 }
 
+// TestRecompressInputMismatchZstd proves ErrInputMismatch wins over
+// whatever error the zstd engine reports when given the wrong-sized input:
+// the engine writer can fail well before EOF (a pledged size mismatch, a
+// short write once the encoder validates length), but the real problem is
+// the input, and that must be what Recompress reports.
+func TestRecompressInputMismatchZstd(t *testing.T) {
+	data := fixtures.Text(10000)
+	p := analyze(t, enginetest.Zstd(t, libzstd.New(), engine.ZstdParams{Level: 3, Checksum: true, ContentSize: true, PledgedSize: true}, data), nil)
+	if _, err := recompress(t, p, data[:len(data)-100], nil); !errors.Is(err, ErrInputMismatch) {
+		t.Fatalf("short input: %v", err)
+	}
+	longer := append(append([]byte{}, data...), data[:100]...)
+	if _, err := recompress(t, p, longer, nil); !errors.Is(err, ErrInputMismatch) {
+		t.Fatalf("long input: %v", err)
+	}
+}
+
 func TestRecompressDigestMismatch(t *testing.T) {
 	data := fixtures.Text(10000)
 	p := analyze(t, enginetest.Gzip(t, goflate.New(), engine.DeflateParams{Level: 6}, data), nil)

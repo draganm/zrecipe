@@ -420,21 +420,24 @@ wrapped with detail:
 | `ErrEngineUnavailable` | Engine named in Params is not in the engine set |
 | `ErrEngineVersionMismatch` | Engine version differs from Params |
 | `ErrParamsVersion` | Unknown Params schema version |
+| `ErrInvalidParams` | Params document is internally inconsistent (bad digest hex, wrong section for the format) |
 
 ## CLI
 
 `cmd/comp-prysm`, built with `github.com/urfave/cli/v2`. Exit status 0 on
-success, 1 on any error, with the error printed to stderr.
+success, 1 on any error, with the error printed to stderr. urfave/cli v2
+stops parsing flags at the first positional argument, so every flag must
+come before the positionals it modifies.
 
 ```
 comp-prysm detect <file>
     Prints gzip, zstd or none.
 
-comp-prysm analyze <file> [--params <out.json>] [--uncompressed <out>] [--parallelism N] [--temp-dir DIR]
+comp-prysm analyze [--params <out.json>] [--uncompressed <out>] [--parallelism N] [--temp-dir DIR] <file>
     Runs Analyze. Writes the Params JSON to --params, default stdout.
     Writes the uncompressed content to --uncompressed if given.
 
-comp-prysm recompress --params <p.json> <uncompressed> <out> [--allow-version-mismatch]
+comp-prysm recompress --params <p.json> [--allow-version-mismatch] <uncompressed> <out>
     Runs Recompress. Writes to a temp file next to <out> and renames on success.
 
 comp-prysm engines

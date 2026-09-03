@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"text/tabwriter"
@@ -37,7 +36,7 @@ func newApp() *cli.App {
 			{
 				Name:      "analyze",
 				Usage:     "find parameters that reproduce a compressed file",
-				ArgsUsage: "<file>",
+				ArgsUsage: "[--params FILE] [--uncompressed FILE] [--parallelism N] [--temp-dir DIR] <file>",
 				Flags: []cli.Flag{
 					&cli.StringFlag{Name: "params", Usage: "write params JSON to `FILE` (default stdout)"},
 					&cli.StringFlag{Name: "uncompressed", Usage: "write the uncompressed content to `FILE`"},
@@ -49,7 +48,7 @@ func newApp() *cli.App {
 			{
 				Name:      "recompress",
 				Usage:     "rebuild a compressed file from params and uncompressed content",
-				ArgsUsage: "<uncompressed> <out>",
+				ArgsUsage: "--params FILE [--allow-version-mismatch] <uncompressed> <out>",
 				Flags: []cli.Flag{
 					&cli.StringFlag{Name: "params", Usage: "params JSON `FILE`", Required: true},
 					&cli.BoolFlag{Name: "allow-version-mismatch", Usage: "try even if the engine version differs"},
@@ -84,7 +83,7 @@ func detect(c *cli.Context) error {
 
 func analyze(c *cli.Context) error {
 	if c.NArg() != 1 {
-		return errors.New("usage: comp-prysm analyze [flags] <file>")
+		return errors.New("usage: comp-prysm analyze [--params FILE] [--uncompressed FILE] [--parallelism N] [--temp-dir DIR] <file>")
 	}
 	f, err := os.Open(c.Args().Get(0))
 	if err != nil {
@@ -92,33 +91,48 @@ func analyze(c *cli.Context) error {
 	}
 	defer f.Close()
 	opts := &compprysm.Options{Parallelism: c.Int("parallelism"), TempDir: c.String("temp-dir")}
-	if path := c.String("uncompressed"); path != "" {
-		out, err := os.Create(path)
+	uncPath := c.String("uncompressed")
+	var uncFile *os.File
+	if uncPath != "" {
+		uncFile, err = os.Create(uncPath)
 		if err != nil {
 			return err
 		}
-		defer out.Close()
-		opts.Uncompressed = out
+		opts.Uncompressed = uncFile
 	}
 	p, err := compprysm.Analyze(context.Background(), f, opts)
+	if uncFile != nil {
+		uncFile.Close()
+		if err != nil {
+			os.Remove(uncPath)
+		}
+	}
 	if err != nil {
 		return err
 	}
-	var w io.Writer = c.App.Writer
 	if path := c.String("params"); path != "" {
 		pf, err := os.Create(path)
 		if err != nil {
 			return err
 		}
-		defer pf.Close()
-		w = pf
+		werr := p.Write(pf)
+		cerr := pf.Close()
+		if werr != nil {
+			os.Remove(path)
+			return werr
+		}
+		if cerr != nil {
+			os.Remove(path)
+			return cerr
+		}
+		return nil
 	}
-	return p.Write(w)
+	return p.Write(c.App.Writer)
 }
 
 func recompress(c *cli.Context) error {
 	if c.NArg() != 2 {
-		return errors.New("usage: comp-prysm recompress --params <p.json> <uncompressed> <out>")
+		return errors.New("usage: comp-prysm recompress --params FILE [--allow-version-mismatch] <uncompressed> <out>")
 	}
 	pf, err := os.Open(c.String("params"))
 	if err != nil {

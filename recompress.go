@@ -53,6 +53,15 @@ func Recompress(ctx context.Context, p *Params, uncompressed io.Reader, w io.Wri
 		err = recompressZstd(p, in, out, &o)
 	}
 	if err != nil {
+		// The engine may have failed because the input does not match
+		// Params rather than because of a genuine engine problem (a
+		// deflate/zstd writer can choke on wrong content well before EOF).
+		// Drain the rest of the input so the digest is complete, and let a
+		// confirmed mismatch take precedence over the engine's own error.
+		io.Copy(io.Discard, in) // best effort; a drain error does not change what we report
+		if got := digestOf(inHash, in.n); got != p.Uncompressed {
+			return fmt.Errorf("%w: input is %s/%d, params expect %s/%d (engine reported: %v)", ErrInputMismatch, got.Blake3, got.Size, p.Uncompressed.Blake3, p.Uncompressed.Size, err)
+		}
 		return err
 	}
 	if got := digestOf(inHash, in.n); got != p.Uncompressed {

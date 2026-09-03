@@ -87,6 +87,29 @@ func TestAnalyzeParamsToStdout(t *testing.T) {
 	}
 }
 
+// TestAnalyzeFailureLeavesNoOutputFiles proves that a failing analyze does
+// not leave a partial --uncompressed or --params file behind: main.go must
+// close and remove both once Analyze (or writing params) errors.
+func TestAnalyzeFailureLeavesNoOutputFiles(t *testing.T) {
+	dir := t.TempDir()
+	data := fixtures.Text(10000)
+	file := enginetest.Gzip(t, goflate.New(), engine.DeflateParams{Level: 6}, data)
+	truncated := file[:len(file)-20]
+	gz := filepath.Join(dir, "in.gz")
+	os.WriteFile(gz, truncated, 0o644)
+	out := filepath.Join(dir, "out")
+	params := filepath.Join(dir, "p.json")
+	if _, err := runApp(t, "analyze", "--uncompressed", out, "--params", params, gz); err == nil {
+		t.Fatal("expected failure on truncated gzip")
+	}
+	if _, err := os.Stat(out); err == nil {
+		t.Fatal("--uncompressed file must not exist after failure")
+	}
+	if _, err := os.Stat(params); err == nil {
+		t.Fatal("--params file must not exist after failure")
+	}
+}
+
 func TestRecompressFailureLeavesNoOutput(t *testing.T) {
 	dir := t.TempDir()
 	data := fixtures.Text(10000)
@@ -105,6 +128,45 @@ func TestRecompressFailureLeavesNoOutput(t *testing.T) {
 	}
 	if matches, _ := filepath.Glob(filepath.Join(dir, "*.tmp")); len(matches) > 0 {
 		t.Fatalf("temp file left behind: %v", matches)
+	}
+}
+
+// TestAnalyzeFlagsFirstSucceeds proves the documented flags-first form
+// works: urfave/cli v2 parses flags only up to the first positional
+// argument, so --params must precede <file>.
+func TestAnalyzeFlagsFirstSucceeds(t *testing.T) {
+	dir := t.TempDir()
+	data := fixtures.Text(1000)
+	file := enginetest.Gzip(t, goflate.New(), engine.DeflateParams{Level: 6}, data)
+	gz := filepath.Join(dir, "in.gz")
+	os.WriteFile(gz, file, 0o644)
+	params := filepath.Join(dir, "params.json")
+	if out, err := runApp(t, "analyze", "--params", params, gz); err != nil {
+		t.Fatalf("flags-first analyze: %v: %s", err, out)
+	}
+	if _, err := os.Stat(params); err != nil {
+		t.Fatalf("params file not written: %v", err)
+	}
+}
+
+// TestAnalyzeFlagsLastFails documents the urfave/cli v2 limitation: once a
+// positional argument is seen, everything after it (including things that
+// look like flags) is treated as a further positional argument, so the
+// command's NArg() check rejects it with a usage error instead of silently
+// ignoring --params.
+func TestAnalyzeFlagsLastFails(t *testing.T) {
+	dir := t.TempDir()
+	data := fixtures.Text(1000)
+	file := enginetest.Gzip(t, goflate.New(), engine.DeflateParams{Level: 6}, data)
+	gz := filepath.Join(dir, "in.gz")
+	os.WriteFile(gz, file, 0o644)
+	params := filepath.Join(dir, "params.json")
+	_, err := runApp(t, "analyze", gz, "--params", params)
+	if err == nil {
+		t.Fatal("expected a usage error when flags follow the positional argument")
+	}
+	if !strings.Contains(err.Error(), "usage:") {
+		t.Fatalf("got %v", err)
 	}
 }
 
