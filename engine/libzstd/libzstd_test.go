@@ -193,18 +193,13 @@ func TestRoundTrip(t *testing.T) {
 	var params []engine.ZstdParams
 	for _, l := range []int{1, 3, 9, 19, -3} {
 		for _, w := range []int{0, 1} {
-			// Candidates always sets EndWithData = !h.EmptyLastBlock for
-			// Workers == 0 candidates; a header built without walking the
-			// blocks (as this helper does) never reports EmptyLastBlock, so
-			// the reference must be built the same way for the search to be
-			// able to rediscover it.
 			params = append(params,
-				engine.ZstdParams{Level: l, Workers: w, Checksum: true, ContentSize: true, PledgedSize: true, EndWithData: w == 0},
-				engine.ZstdParams{Level: l, Workers: w, EndWithData: w == 0},
+				engine.ZstdParams{Level: l, Workers: w, Checksum: true, ContentSize: true, PledgedSize: true},
+				engine.ZstdParams{Level: l, Workers: w},
 			)
 		}
 	}
-	params = append(params, engine.ZstdParams{Level: 5, Long: true, WindowLog: 27, Checksum: true, EndWithData: true})
+	params = append(params, engine.ZstdParams{Level: 5, Long: true, WindowLog: 27, Checksum: true})
 	params = append(params, engine.ZstdParams{Level: 3, Workers: 0, PledgedSize: true, ContentSize: true, EndWithData: true})
 	params = append(params, engine.ZstdParams{Level: 5, Long: true, WindowLog: 27, PledgedSize: true, ContentSize: true, Checksum: true})
 	enginetest.RoundTripZstd(t, New(), params, fixtures.Small())

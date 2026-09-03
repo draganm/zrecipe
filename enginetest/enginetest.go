@@ -127,9 +127,12 @@ func RoundTripZstd(t *testing.T, e engine.ZstdEngine, params []engine.ZstdParams
 		for _, p := range params {
 			t.Run(fmt.Sprintf("%s/%+v", f.Name, p), func(t *testing.T) {
 				file := Zstd(t, e, p, f.Data)
-				hdr, err := format.ParseZstdFrameHeader(bufio.NewReader(bytes.NewReader(file)))
+				hdr, n, err := format.ZstdFrameLength(bufio.NewReader(bytes.NewReader(file)))
 				if err != nil {
 					t.Fatal(err)
+				}
+				if n != int64(len(file)) {
+					t.Fatalf("frame length %d, want %d", n, len(file))
 				}
 				var cands []search.Candidate
 				for _, c := range Flatten(e.Candidates(hdr, int64(len(f.Data)))) {
