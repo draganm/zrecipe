@@ -106,13 +106,16 @@ func payloadSource(r io.ReadSeeker, off, size int64) (func() (io.Reader, error),
 	}, false
 }
 
-// spoolWriters builds the fan-out for the decompressed stream.
-func spoolWriters(o *Options, sp *search.Spool, extra ...io.Writer) io.Writer {
+// spoolWriters builds the fan-out for the decompressed stream, wrapped so
+// writes observe ctx: pass 1 has no other point where cancellation is
+// checked, so without this a cancelled Analyze would still run to
+// completion decompressing and hashing the whole input.
+func spoolWriters(ctx context.Context, o *Options, sp *search.Spool, extra ...io.Writer) io.Writer {
 	ws := append([]io.Writer{sp}, extra...)
 	if o.Uncompressed != nil {
 		ws = append(ws, o.Uncompressed)
 	}
-	return io.MultiWriter(ws...)
+	return &ctxWriter{ctx: ctx, w: io.MultiWriter(ws...)}
 }
 
 func analyzeGzip(ctx context.Context, r io.ReadSeeker, o *Options) (*Params, error) {
@@ -128,8 +131,11 @@ func analyzeGzip(ctx context.Context, r io.ReadSeeker, o *Options) (*Params, err
 	uncHash := newHasher()
 	crc := crc32.NewIEEE()
 	fr := flate.NewReader(br)
-	n, err := io.Copy(spoolWriters(o, sp, uncHash, crc), fr)
+	n, err := io.Copy(spoolWriters(ctx, o, sp, uncHash, crc), fr)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, fmt.Errorf("%w: deflate: %v", ErrCorrupt, err)
 	}
 	fr.Close()
@@ -191,8 +197,11 @@ func analyzeZstd(ctx context.Context, r io.ReadSeeker, o *Options) (*Params, err
 	sp := search.NewSpool(o.TempDir, o.MaxInMemory)
 	defer sp.Close()
 	uncHash := newHasher()
-	n, err := io.Copy(spoolWriters(o, sp, uncHash), dec)
+	n, err := io.Copy(spoolWriters(ctx, o, sp, uncHash), dec)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, fmt.Errorf("%w: zstd: %v", ErrCorrupt, err)
 	}
 	if hdr.HasContentSize && hdr.ContentSize != uint64(n) {
