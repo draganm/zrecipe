@@ -96,6 +96,32 @@ func TestPropagatesWriteError(t *testing.T) {
 	}
 }
 
+// TestLevelZeroStoredBlocksAreCanonical proves level 0 emits maximal
+// (65535-byte) stored blocks, matching what real deflate implementations
+// produce, rather than being capped short by the internal I/O buffer size.
+func TestLevelZeroStoredBlocksAreCanonical(t *testing.T) {
+	data := fixtures.Random(200000, 7)
+	var buf bytes.Buffer
+	w, err := New().NewWriter(&buf, engine.DeflateParams{Level: 0, Strategy: "default", WindowBits: 15, MemLevel: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write(data); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.Bytes()
+	if len(out) < 5 {
+		t.Fatalf("output too short: %d bytes", len(out))
+	}
+	length := int(out[1]) | int(out[2])<<8
+	if length != 65535 {
+		t.Fatalf("first stored block LEN = %d, want 65535 (out[0:5] = % x)", length, out[:5])
+	}
+}
+
 func TestRoundTripTier1And2(t *testing.T) {
 	e := New()
 	tiers := e.Candidates(&format.GzipHeader{}, 0)

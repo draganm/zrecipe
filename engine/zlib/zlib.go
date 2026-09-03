@@ -27,7 +27,12 @@ import (
 	"github.com/draganm/comp-prysm/format"
 )
 
-const bufSize = 64 << 10
+// bufSize must exceed 65535 (deflate's max stored-block length) plus the
+// 5-byte stored-block header by enough margin that a level-0 write is never
+// output-buffer-limited to a shorter block: with avail_out at exactly
+// 64 KiB, zlib caps each stored block at avail_out-5 (65531) instead of the
+// canonical 65535.
+const bufSize = 128 << 10
 
 var strategies = map[string]C.int{
 	engine.StrategyDefault:     C.Z_DEFAULT_STRATEGY,
