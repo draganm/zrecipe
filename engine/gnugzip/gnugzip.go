@@ -56,8 +56,8 @@ func (*Engine) Candidates(h *format.GzipHeader, _ int64) [][]engine.DeflateParam
 
 // NewWriter returns a writer that compresses into w. Close flushes.
 func (*Engine) NewWriter(w io.Writer, p engine.DeflateParams) (io.WriteCloser, error) {
-	if p.Strategy != "" || p.WindowBits != 0 || p.MemLevel != 0 {
-		return nil, errors.New("gnu-gzip: strategy, window_bits and mem_level are not supported")
+	if p.Strategy != "" || p.WindowBits != 0 || p.MemLevel != 0 || p.BlockSize != 0 || p.Independent || p.SingleThread {
+		return nil, errors.New("gnu-gzip: only level and rsyncable are supported")
 	}
 	if p.Level < 1 || p.Level > 9 {
 		return nil, fmt.Errorf("gnu-gzip: level %d out of range 1..9", p.Level)

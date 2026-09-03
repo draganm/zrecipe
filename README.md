@@ -126,6 +126,7 @@ defaults described above.
 |---|---|---|---|
 | `gnu-gzip` | gzip | pure-Go port of GNU gzip's compressor | the ported release, `1.14` |
 | `zlib` | gzip | cgo, system zlib | `zlibVersion()` |
+| `pigz` | gzip | cgo, system zlib driven the way pigz does | `2.8+zlib` plus `zlibVersion()` |
 | `libzstd` | zstd | cgo, system libzstd | `ZSTD_versionString()` |
 | `go-flate` | gzip | stdlib `compress/flate` | `runtime.Version()` |
 | `klauspost-flate` | gzip | `github.com/klauspost/compress/flate` | module version from `debug.ReadBuildInfo()` |
@@ -139,7 +140,19 @@ GNU gzip is the most common producer of gzip files in the wild, and because
 a pure-Go engine keeps the resulting Params usable from a binary built
 without cgo. The ported files are GPL-licensed; see License below.
 
-The two cgo engines are present only in binaries built with cgo enabled.
+`pigz` reproduces pigz, the parallel gzip. pigz compresses with zlib but
+cuts the input into blocks (128 KiB by default), restarts the compressor on
+every block primed with the previous 32 KiB, and byte-aligns each block
+with empty deflate blocks, so a plain zlib stream matches its output only
+for input that fits in one block. The engine drives the system zlib exactly
+as pigz 2.8 does, covering both of pigz's code paths (`-p 1` keeps one
+stream and flushes at the same boundaries; more threads reset per block),
+`--independent`, `--rsyncable`, `-b` block sizes, and the `-H`/`-U`
+strategies. zopfli (`-11`) is not covered. Its version string names both
+the pigz release ported and the zlib linked, since the output depends on
+both.
+
+The three cgo engines are present only in binaries built with cgo enabled.
 Against the versions pinned by this repository's flake, `zlib` reports
 `1.3.2` and `libzstd` reports `1.5.7`; `klauspost-flate` and
 `klauspost-zstd` both report the `github.com/klauspost/compress` module
@@ -203,8 +216,9 @@ byte of the deflate stream, so mtime, filename, OS byte, XFL and every
 optional field come back exact without needing to be parsed individually.
 `strategy` is meaningful only for the `zlib` engine (`default`, `filtered`,
 `huffman_only`, `rle` or `fixed`); the pure-Go engines omit it because they
-have no equivalent knob. `rsyncable` is meaningful only for `gnu-gzip` and
-records that the file was made with `gzip --rsyncable`.
+have no equivalent knob. `rsyncable` records `--rsyncable` for `gnu-gzip`
+and `pigz`. `block_size` (in KiB), `independent` and `single_thread` are
+`pigz` only: its `-b`, `-i`, and the `-p 1` code path.
 
 The same file compressed with the `zstd` CLI instead produces a `zstd`
 section:
@@ -298,11 +312,11 @@ get short reads, which shift the point where its window slides; that
 changes the output only when the last few hundred bytes of input fall in
 the region where gzip stops matching, or when a final match runs past the
 end of input into stale window bytes, and in those cases gzip's own
-pipe output is timing-dependent. pigz is not reproduced on real-sized
-input for any tested level or worker count; its parallel block splitting
-produces byte streams no single-stream candidate matches, so it would need
-its own engine and is out of scope for v1. Files produced by zlib itself,
-Go's `compress/gzip`, and both klauspost engines are reproduced.
+pipe output is timing-dependent. pigz is reproduced through the `pigz`
+engine at every level, on both of its code paths, with `-i`, `-R` and `-b`;
+zlib alone matched only input that fits in a single pigz block. Files
+produced by zlib itself, Go's `compress/gzip`, and both klauspost engines
+are reproduced.
 
 ## Testing
 
@@ -340,6 +354,7 @@ The full design, including the search algorithm, the candidate grids for
 each engine, and the spike results that shaped the limitations above, lives
 at `docs/superpowers/specs/2026-09-03-comp-prysm-design.md`, with the GNU
 gzip engine and the AGPL relicensing in
-`docs/superpowers/specs/2026-09-03-gnu-gzip-engine-design.md`. The
+`docs/superpowers/specs/2026-09-03-gnu-gzip-engine-design.md` and the
+pigz engine in `docs/superpowers/specs/2026-09-03-pigz-engine-design.md`. The
 implementation plan that built this library task by task lives at
 `docs/superpowers/plans/2026-09-03-comp-prysm.md`.

@@ -96,8 +96,8 @@ type writer struct {
 }
 
 func (*Engine) NewWriter(w io.Writer, p engine.DeflateParams) (io.WriteCloser, error) {
-	if p.Rsyncable {
-		return nil, errors.New("zlib: rsyncable is not supported")
+	if p.Rsyncable || p.BlockSize != 0 || p.Independent || p.SingleThread {
+		return nil, errors.New("zlib: rsyncable, block_size, independent and single_thread are not supported")
 	}
 	strategy := p.Strategy
 	if strategy == "" {

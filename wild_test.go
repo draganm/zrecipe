@@ -120,21 +120,21 @@ func TestWildGzip(t *testing.T) {
 	}
 }
 
+// TestWildPigz covers both pigz code paths (-p1 and more than one thread),
+// --independent, --rsyncable and a non-default block size; all are
+// reproduced by the cgo pigz engine.
 func TestWildPigz(t *testing.T) {
 	skipWithoutCgoEngines(t)
 	tool(t, "pigz")
 	for _, f := range wildInputs() {
-		for _, args := range [][]string{{"-1"}, {"-6"}, {"-9"}, {"-p1", "-6"}, {"-p4", "-6"}} {
+		for _, args := range [][]string{
+			{"-1"}, {"-6"}, {"-9"}, {"-0"},
+			{"-p1", "-6"}, {"-p4", "-6"}, {"-p1", "-0"},
+			{"-i", "-6"}, {"-R", "-6"}, {"-b", "64", "-6"},
+			{"-p1", "-i", "-6"}, {"-p1", "-R", "-6"},
+		} {
 			name := filepath.Join(args...)
 			t.Run(f.Name+"/"+name, func(t *testing.T) {
-				// pigz splits input larger than one block across parallel
-				// deflate streams; no candidate in the search space
-				// reproduces that layout for text-1m or mixed-3m. Only the
-				// tiny fixture (a single block) is reproducible. See plan
-				// Task 15 report.
-				if f.Name != "tiny" {
-					t.Skip("known: pigz " + f.Name + " " + name + " not reproducible, see plan Task 15 report")
-				}
 				check(t, run(t, f.Data, "", "pigz", append([]string{"-c"}, args...)...), f.Data)
 			})
 		}

@@ -53,6 +53,9 @@ func TestRejectsUnsupportedParams(t *testing.T) {
 		{Level: 6, Strategy: engine.StrategyFiltered},
 		{Level: 6, WindowBits: 15},
 		{Level: 6, MemLevel: 8},
+		{Level: 6, BlockSize: 128},
+		{Level: 6, Independent: true},
+		{Level: 6, SingleThread: true},
 	} {
 		if _, err := New().NewWriter(io.Discard, p); err == nil {
 			t.Errorf("%+v: expected an error", p)

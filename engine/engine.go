@@ -41,10 +41,15 @@ const (
 // DeflateParams configures a raw deflate stream.
 type DeflateParams struct {
 	Level      int    `json:"level"`
-	Strategy   string `json:"strategy,omitempty"`    // zlib only
+	Strategy   string `json:"strategy,omitempty"`    // zlib and pigz (pigz: huffman_only and rle only)
 	WindowBits int    `json:"window_bits,omitempty"` // zlib only: 9..15
 	MemLevel   int    `json:"mem_level,omitempty"`   // zlib only: 1..9
-	Rsyncable  bool   `json:"rsyncable,omitempty"`   // gnu-gzip only: --rsyncable
+	Rsyncable  bool   `json:"rsyncable,omitempty"`   // gnu-gzip and pigz: --rsyncable
+
+	// pigz only.
+	BlockSize    int  `json:"block_size,omitempty"`    // -b, in KiB; 0 means pigz's default of 128
+	Independent  bool `json:"independent,omitempty"`   // -i: blocks are compressed without the preceding history
+	SingleThread bool `json:"single_thread,omitempty"` // -p 1: pigz's single-thread code path, which flushes differently
 }
 
 // GzipParams is DeflateParams plus the verbatim gzip header.
