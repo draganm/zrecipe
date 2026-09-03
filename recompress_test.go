@@ -10,8 +10,6 @@ import (
 	"github.com/draganm/comp-prysm/engine"
 	"github.com/draganm/comp-prysm/engine/goflate"
 	"github.com/draganm/comp-prysm/engine/kpzstd"
-	"github.com/draganm/comp-prysm/engine/libzstd"
-	"github.com/draganm/comp-prysm/engine/zlib"
 	"github.com/draganm/comp-prysm/enginetest"
 	"github.com/draganm/comp-prysm/fixtures"
 )
@@ -23,27 +21,32 @@ func recompress(t *testing.T, p *Params, data []byte, opts *RecompressOptions) (
 	return out.Bytes(), err
 }
 
+// checkRoundTrip is shared with recompress_cgo_test.go's
+// TestRecompressRoundTripCgo, which runs the same check for the cgo-only
+// zlib and libzstd engines.
+func checkRoundTrip(t *testing.T, fixtureName, caseName string, file, data []byte) {
+	t.Helper()
+	t.Run(fixtureName+"/"+caseName, func(t *testing.T) {
+		p := analyze(t, file, nil)
+		out, err := recompress(t, p, data, nil)
+		if err != nil {
+			t.Fatalf("recompress: %v", err)
+		}
+		if !bytes.Equal(out, file) {
+			t.Fatal("recompressed bytes differ")
+		}
+	})
+}
+
 func TestRecompressRoundTrip(t *testing.T) {
 	for _, f := range fixtures.All() {
 		files := map[string][]byte{
-			"zlib-6":        enginetest.Gzip(t, zlib.New(), engine.DeflateParams{Level: 6, Strategy: "default", WindowBits: 15, MemLevel: 8}, f.Data),
 			"goflate-9":     enginetest.Gzip(t, goflate.New(), engine.DeflateParams{Level: 9}, f.Data),
-			"libzstd-3":     enginetest.Zstd(t, libzstd.New(), engine.ZstdParams{Level: 3, Checksum: true, ContentSize: true, PledgedSize: true}, f.Data),
-			"libzstd-7-mt":  enginetest.Zstd(t, libzstd.New(), engine.ZstdParams{Level: 7, Workers: 1}, f.Data),
 			"kpzstd-stream": enginetest.Zstd(t, kpzstd.New(), engine.ZstdParams{Level: 2, Checksum: true}, f.Data),
 			"none":          f.Data,
 		}
 		for name, file := range files {
-			t.Run(f.Name+"/"+name, func(t *testing.T) {
-				p := analyze(t, file, nil)
-				out, err := recompress(t, p, f.Data, nil)
-				if err != nil {
-					t.Fatalf("recompress: %v", err)
-				}
-				if !bytes.Equal(out, file) {
-					t.Fatal("recompressed bytes differ")
-				}
-			})
+			checkRoundTrip(t, f.Name, name, file, f.Data)
 		}
 	}
 }
@@ -58,23 +61,6 @@ func TestRecompressInputMismatch(t *testing.T) {
 	}
 	if _, err := recompress(t, p, data[:9000], nil); !errors.Is(err, ErrInputMismatch) {
 		t.Fatalf("short input: %v", err)
-	}
-}
-
-// TestRecompressInputMismatchZstd proves ErrInputMismatch wins over
-// whatever error the zstd engine reports when given the wrong-sized input:
-// the engine writer can fail well before EOF (a pledged size mismatch, a
-// short write once the encoder validates length), but the real problem is
-// the input, and that must be what Recompress reports.
-func TestRecompressInputMismatchZstd(t *testing.T) {
-	data := fixtures.Text(10000)
-	p := analyze(t, enginetest.Zstd(t, libzstd.New(), engine.ZstdParams{Level: 3, Checksum: true, ContentSize: true, PledgedSize: true}, data), nil)
-	if _, err := recompress(t, p, data[:len(data)-100], nil); !errors.Is(err, ErrInputMismatch) {
-		t.Fatalf("short input: %v", err)
-	}
-	longer := append(append([]byte{}, data...), data[:100]...)
-	if _, err := recompress(t, p, longer, nil); !errors.Is(err, ErrInputMismatch) {
-		t.Fatalf("long input: %v", err)
 	}
 }
 

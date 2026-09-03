@@ -8,11 +8,20 @@ import (
 	"strings"
 	"testing"
 
+	compprysm "github.com/draganm/comp-prysm"
 	"github.com/draganm/comp-prysm/engine"
 	"github.com/draganm/comp-prysm/engine/goflate"
 	"github.com/draganm/comp-prysm/enginetest"
 	"github.com/draganm/comp-prysm/fixtures"
 )
+
+// hasCgoEngines reports whether this binary was built with cgo, and so has
+// the zlib and libzstd engines available. The "engines" subcommand's output
+// (and therefore what it can be asserted to contain) depends on it.
+func hasCgoEngines() bool {
+	_, ok := engine.ByName(compprysm.DefaultEngines(), "zlib")
+	return ok
+}
 
 func runApp(t *testing.T, args ...string) (string, error) {
 	t.Helper()
@@ -182,8 +191,15 @@ func TestAnalyzeFlagsLastFails(t *testing.T) {
 
 func TestEngines(t *testing.T) {
 	out, err := runApp(t, "engines")
-	if err != nil || !strings.Contains(out, "zlib") || !strings.Contains(out, "libzstd") {
+	if err != nil || !strings.Contains(out, "go-flate") || !strings.Contains(out, "klauspost-zstd") {
 		t.Fatalf("%q %v", out, err)
+	}
+	// zlib/libzstd are present only in binaries built with cgo (this test
+	// binary included), see engines_cgo.go/engines_nocgo.go.
+	if hasCgoEngines() {
+		if !strings.Contains(out, "zlib") || !strings.Contains(out, "libzstd") {
+			t.Fatalf("%q", out)
+		}
 	}
 }
 
@@ -247,6 +263,11 @@ func TestBuiltBinaryReportsModuleVersions(t *testing.T) {
 	}
 	requireLine("klauspost-flate", "v1.20.0")
 	requireLine("klauspost-zstd", "v1.20.0")
-	requireLine("zlib", "1.3.2")
-	requireLine("libzstd", "1.5.7")
+	// The child build inherits CGO_ENABLED from this process's environment
+	// (exec.Command with a nil Env), so zlib/libzstd appear in its "engines"
+	// output exactly when they appear in this test binary's own.
+	if hasCgoEngines() {
+		requireLine("zlib", "1.3.2")
+		requireLine("libzstd", "1.5.7")
+	}
 }

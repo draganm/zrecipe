@@ -69,6 +69,19 @@ func check(t *testing.T, file, data []byte) {
 	}
 }
 
+// skipWithoutCgoEngines skips a wild-fixture test when built without cgo.
+// These fixtures are made by real-world compressors (GNU gzip, pigz, the
+// zstd CLI); reproducing them byte-for-byte is only realistic against the
+// matching cgo engine (zlib, libzstd) that shares their implementation, so
+// without cgo almost every case is unreproducible and the test would fail
+// for a reason unrelated to whatever it's meant to check.
+func skipWithoutCgoEngines(t *testing.T) {
+	t.Helper()
+	if len(cgoEngines()) == 0 {
+		t.Skip("no cgo engines compiled in (CGO_ENABLED=0); this fixture is realistically reproducible only against the matching cgo engine")
+	}
+}
+
 func wildInputs() []fixtures.Fixture {
 	return []fixtures.Fixture{
 		{Name: "text-1m", Data: fixtures.Text(1 << 20)},
@@ -81,6 +94,7 @@ func wildInputs() []fixtures.Fixture {
 }
 
 func TestWildGzip(t *testing.T) {
+	skipWithoutCgoEngines(t)
 	tool(t, "gzip")
 	for _, f := range wildInputs() {
 		dir := t.TempDir()
@@ -115,6 +129,7 @@ func TestWildGzip(t *testing.T) {
 }
 
 func TestWildPigz(t *testing.T) {
+	skipWithoutCgoEngines(t)
 	tool(t, "pigz")
 	for _, f := range wildInputs() {
 		for _, args := range [][]string{{"-1"}, {"-6"}, {"-9"}, {"-p1", "-6"}, {"-p4", "-6"}} {
@@ -135,6 +150,7 @@ func TestWildPigz(t *testing.T) {
 }
 
 func TestWildZstd(t *testing.T) {
+	skipWithoutCgoEngines(t)
 	tool(t, "zstd")
 	for _, f := range wildInputs() {
 		dir := t.TempDir()

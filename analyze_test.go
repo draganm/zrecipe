@@ -11,8 +11,6 @@ import (
 	"github.com/draganm/comp-prysm/engine"
 	"github.com/draganm/comp-prysm/engine/goflate"
 	"github.com/draganm/comp-prysm/engine/kpzstd"
-	"github.com/draganm/comp-prysm/engine/libzstd"
-	"github.com/draganm/comp-prysm/engine/zlib"
 	"github.com/draganm/comp-prysm/enginetest"
 	"github.com/draganm/comp-prysm/fixtures"
 )
@@ -55,69 +53,87 @@ func TestAnalyzeEmptyInput(t *testing.T) {
 	}
 }
 
+// gzipProducerCase and checkGzipFindsProducer are shared with
+// analyze_cgo_test.go, which runs the same check against the cgo-only zlib
+// engine; this file only compiles against the pure-Go engines so the
+// no-cgo build stays buildable.
+type gzipProducerCase struct {
+	engine engine.DeflateEngine
+	params engine.DeflateParams
+}
+
+func checkGzipFindsProducer(t *testing.T, data []byte, tc gzipProducerCase) {
+	t.Helper()
+	file := enginetest.Gzip(t, tc.engine, tc.params, data)
+	var unc bytes.Buffer
+	p := analyze(t, file, &Options{Uncompressed: &unc})
+	if p.Format != FormatGzip || p.Gzip == nil {
+		t.Fatalf("%+v", p)
+	}
+	if !bytes.Equal(unc.Bytes(), data) || p.Uncompressed.Size != int64(len(data)) || p.Compressed.Size != int64(len(file)) {
+		t.Fatalf("sizes/content wrong: %+v", p)
+	}
+	hdr, _ := base64.StdEncoding.DecodeString(p.Gzip.HeaderB64)
+	if !bytes.Equal(hdr, file[:10]) {
+		t.Fatalf("header %x", hdr)
+	}
+	// The found candidate must reproduce the file, whichever engine it names.
+	e, _ := engine.ByName(DefaultEngines(), p.Engine)
+	again := enginetest.Gzip(t, e.(engine.DeflateEngine), p.Gzip.DeflateParams, data)
+	if !bytes.Equal(again, file) {
+		t.Fatalf("%s %+v does not reproduce a file made by %s %+v", p.Engine, p.Gzip.DeflateParams, tc.engine.Name(), tc.params)
+	}
+	t.Logf("%s %+v -> %s %s %+v", tc.engine.Name(), tc.params, p.Engine, p.EngineVersion, p.Gzip.DeflateParams)
+}
+
 func TestAnalyzeGzipFindsProducer(t *testing.T) {
 	data := fixtures.Mixed(300 << 10)
-	for _, tc := range []struct {
-		engine engine.DeflateEngine
-		params engine.DeflateParams
-	}{
-		{zlib.New(), engine.DeflateParams{Level: 6, Strategy: "default", WindowBits: 15, MemLevel: 8}},
-		{zlib.New(), engine.DeflateParams{Level: 9, Strategy: "default", WindowBits: 15, MemLevel: 8}},
-		{zlib.New(), engine.DeflateParams{Level: 4, Strategy: "filtered", WindowBits: 15, MemLevel: 8}},
+	for _, tc := range []gzipProducerCase{
 		{goflate.New(), engine.DeflateParams{Level: 6}},
 		{goflate.New(), engine.DeflateParams{Level: 1}},
 	} {
-		file := enginetest.Gzip(t, tc.engine, tc.params, data)
-		var unc bytes.Buffer
-		p := analyze(t, file, &Options{Uncompressed: &unc})
-		if p.Format != FormatGzip || p.Gzip == nil {
-			t.Fatalf("%+v", p)
-		}
-		if !bytes.Equal(unc.Bytes(), data) || p.Uncompressed.Size != int64(len(data)) || p.Compressed.Size != int64(len(file)) {
-			t.Fatalf("sizes/content wrong: %+v", p)
-		}
-		hdr, _ := base64.StdEncoding.DecodeString(p.Gzip.HeaderB64)
-		if !bytes.Equal(hdr, file[:10]) {
-			t.Fatalf("header %x", hdr)
-		}
-		// The found candidate must reproduce the file, whichever engine it names.
-		e, _ := engine.ByName(DefaultEngines(), p.Engine)
-		again := enginetest.Gzip(t, e.(engine.DeflateEngine), p.Gzip.DeflateParams, data)
-		if !bytes.Equal(again, file) {
-			t.Fatalf("%s %+v does not reproduce a file made by %s %+v", p.Engine, p.Gzip.DeflateParams, tc.engine.Name(), tc.params)
-		}
-		t.Logf("%s %+v -> %s %s %+v", tc.engine.Name(), tc.params, p.Engine, p.EngineVersion, p.Gzip.DeflateParams)
+		checkGzipFindsProducer(t, data, tc)
 	}
+}
+
+// zstdProducerCase and checkZstdFindsProducer are shared with
+// analyze_cgo_test.go; see the comment on gzipProducerCase above.
+type zstdProducerCase struct {
+	engine engine.ZstdEngine
+	params engine.ZstdParams
+}
+
+func checkZstdFindsProducer(t *testing.T, data []byte, tc zstdProducerCase) {
+	t.Helper()
+	file := enginetest.Zstd(t, tc.engine, tc.params, data)
+	p := analyze(t, file, nil)
+	if p.Format != FormatZstd || p.Zstd == nil {
+		t.Fatalf("%+v", p)
+	}
+	e, _ := engine.ByName(DefaultEngines(), p.Engine)
+	again := enginetest.Zstd(t, e.(engine.ZstdEngine), *p.Zstd, data)
+	if !bytes.Equal(again, file) {
+		t.Fatalf("%s %+v does not reproduce a file made by %s %+v", p.Engine, *p.Zstd, tc.engine.Name(), tc.params)
+	}
+	t.Logf("%s %+v -> %s %s %+v", tc.engine.Name(), tc.params, p.Engine, p.EngineVersion, *p.Zstd)
 }
 
 func TestAnalyzeZstdFindsProducer(t *testing.T) {
 	data := fixtures.Mixed(300 << 10)
-	for _, tc := range []struct {
-		engine engine.ZstdEngine
-		params engine.ZstdParams
-	}{
-		{libzstd.New(), engine.ZstdParams{Level: 3, Checksum: true, ContentSize: true, PledgedSize: true}},
-		{libzstd.New(), engine.ZstdParams{Level: 12, Workers: 1}},
+	for _, tc := range []zstdProducerCase{
 		{kpzstd.New(), engine.ZstdParams{Level: 2, Checksum: true}},
 		{kpzstd.New(), engine.ZstdParams{Level: 3, ContentSize: true, PledgedSize: true, SingleSegment: true}},
 	} {
-		file := enginetest.Zstd(t, tc.engine, tc.params, data)
-		p := analyze(t, file, nil)
-		if p.Format != FormatZstd || p.Zstd == nil {
-			t.Fatalf("%+v", p)
-		}
-		e, _ := engine.ByName(DefaultEngines(), p.Engine)
-		again := enginetest.Zstd(t, e.(engine.ZstdEngine), *p.Zstd, data)
-		if !bytes.Equal(again, file) {
-			t.Fatalf("%s %+v does not reproduce a file made by %s %+v", p.Engine, *p.Zstd, tc.engine.Name(), tc.params)
-		}
-		t.Logf("%s %+v -> %s %s %+v", tc.engine.Name(), tc.params, p.Engine, p.EngineVersion, *p.Zstd)
+		checkZstdFindsProducer(t, data, tc)
 	}
 }
 
+// TestAnalyzeSequentialAndSpilled uses goflate (not zlib) so this file
+// compiles without cgo; the sequential/spilled search path it exercises is
+// engine-agnostic.
 func TestAnalyzeSequentialAndSpilled(t *testing.T) {
 	data := fixtures.Text(200 << 10)
-	file := enginetest.Gzip(t, zlib.New(), engine.DeflateParams{Level: 6, Strategy: "default", WindowBits: 15, MemLevel: 8}, data)
+	file := enginetest.Gzip(t, goflate.New(), engine.DeflateParams{Level: 6}, data)
 	p, err := Analyze(context.Background(), seekOnly{r: bytes.NewReader(file)}, &Options{MaxInMemory: 1, TempDir: t.TempDir(), Parallelism: 8})
 	if err != nil {
 		t.Fatal(err)
