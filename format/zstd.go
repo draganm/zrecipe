@@ -21,6 +21,12 @@ type ZstdFrameHeader struct {
 	HasContentSize bool
 	ContentSize    uint64
 	DictID         uint32
+
+	// EmptyLastBlock is set by ZstdFrameLength when the frame ends with an
+	// empty block after at least one other block. libzstd emits one when
+	// ZSTD_e_end is signalled with no input after all data was fed with
+	// ZSTD_e_continue.
+	EmptyLastBlock bool
 }
 
 // ParseZstdFrameHeader reads a zstd frame header from r and leaves r at the
@@ -107,6 +113,7 @@ func ZstdFrameLength(r *bufio.Reader) (*ZstdFrameHeader, int64, error) {
 		return nil, 0, err
 	}
 	n := int64(h.HeaderLen)
+	blocks := 0
 	for {
 		var bh [3]byte
 		if _, err := io.ReadFull(r, bh[:]); err != nil {
@@ -114,8 +121,9 @@ func ZstdFrameLength(r *bufio.Reader) (*ZstdFrameHeader, int64, error) {
 		}
 		v := uint32(bh[0]) | uint32(bh[1])<<8 | uint32(bh[2])<<16
 		last := v&1 != 0
+		typ := (v >> 1) & 3
 		size := int(v >> 3)
-		switch (v >> 1) & 3 {
+		switch typ {
 		case 1: // RLE block: one byte on disk
 			size = 1
 		case 3:
@@ -125,7 +133,11 @@ func ZstdFrameLength(r *bufio.Reader) (*ZstdFrameHeader, int64, error) {
 			return nil, 0, fmt.Errorf("%w: zstd block truncated: %v", ErrBadHeader, err)
 		}
 		n += 3 + int64(size)
+		blocks++
 		if last {
+			if typ == 0 && v>>3 == 0 && blocks > 1 {
+				h.EmptyLastBlock = true
+			}
 			break
 		}
 	}

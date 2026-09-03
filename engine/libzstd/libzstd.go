@@ -50,6 +50,9 @@ func (*Engine) Candidates(h *format.ZstdFrameHeader, _ int64) [][]engine.ZstdPar
 				for _, pl := range pledged {
 					p := base
 					p.Level, p.Workers, p.PledgedSize = l, w, pl
+					if w == 0 {
+						p.EndWithData = !h.EmptyLastBlock
+					}
 					if mutate != nil {
 						mutate(&p)
 					}
@@ -62,8 +65,12 @@ func (*Engine) Candidates(h *format.ZstdFrameHeader, _ int64) [][]engine.ZstdPar
 	t1 := expand(tier1Levels, nil)
 	t2 := expand(tier2Levels, nil)
 	all := append(append([]int{}, tier1Levels...), 20, 21, 22)
-	if h.WindowLog >= 27 {
-		t2 = append(t2, expand(all, func(p *engine.ZstdParams) { p.Long = true; p.WindowLog = h.WindowLog })...)
+	if h.WindowLog >= 27 || h.SingleSegment {
+		wl := h.WindowLog
+		if wl < 27 {
+			wl = 27
+		}
+		t2 = append(t2, expand(all, func(p *engine.ZstdParams) { p.Long = true; p.WindowLog = wl })...)
 	}
 	if h.WindowLog > 0 {
 		t2 = append(t2, expand(tier1Levels, func(p *engine.ZstdParams) { p.WindowLog = h.WindowLog })...)
@@ -80,6 +87,14 @@ type writer struct {
 	outCap int
 	err    error
 	closed bool
+
+	// endWithData holds back the most recently written chunk (already
+	// copied into in, byte count in pending) instead of compressing it
+	// with ZSTD_e_continue, so it can be handed to libzstd together with
+	// ZSTD_e_end. This reproduces known-size producers such as the zstd
+	// CLI reading a file, which never signals end with empty input.
+	endWithData bool
+	pending     int
 }
 
 func setParam(cctx *C.ZSTD_CCtx, param C.ZSTD_cParameter, v int) error {
@@ -134,7 +149,13 @@ func (*Engine) NewWriter(w io.Writer, p engine.ZstdParams, uncompressedSize int6
 			return fail(fmt.Errorf("libzstd: pledge size: %s", C.GoString(C.ZSTD_getErrorName(rc))))
 		}
 	}
-	z := &writer{w: w, cctx: cctx, inCap: int(C.ZSTD_CStreamInSize()), outCap: int(C.ZSTD_CStreamOutSize())}
+	z := &writer{
+		w:           w,
+		cctx:        cctx,
+		inCap:       int(C.ZSTD_CStreamInSize()),
+		outCap:      int(C.ZSTD_CStreamOutSize()),
+		endWithData: p.EndWithData && p.Workers == 0,
+	}
 	z.in = C.malloc(C.size_t(z.inCap))
 	z.out = C.malloc(C.size_t(z.outCap))
 	return z, nil
@@ -146,6 +167,25 @@ func (z *writer) emit(n C.size_t) error {
 	}
 	_, err := z.w.Write(unsafe.Slice((*byte)(z.out), int(n)))
 	return err
+}
+
+// compressPending runs the ZSTD_e_continue loop over the first n bytes of
+// z.in.
+func (z *writer) compressPending(n int) error {
+	in := C.ZSTD_inBuffer{src: z.in, size: C.size_t(n), pos: 0}
+	for in.pos < in.size {
+		out := C.ZSTD_outBuffer{dst: z.out, size: C.size_t(z.outCap), pos: 0}
+		rc := C.ZSTD_compressStream2(z.cctx, &out, &in, C.ZSTD_e_continue)
+		if C.ZSTD_isError(rc) != 0 {
+			z.err = fmt.Errorf("libzstd: compress: %s", C.GoString(C.ZSTD_getErrorName(rc)))
+			return z.err
+		}
+		if err := z.emit(out.pos); err != nil {
+			z.err = err
+			return err
+		}
+	}
+	return nil
 }
 
 func (z *writer) Write(p []byte) (int, error) {
@@ -161,19 +201,17 @@ func (z *writer) Write(p []byte) (int, error) {
 		if n > z.inCap {
 			n = z.inCap
 		}
-		C.memcpy(z.in, unsafe.Pointer(&p[0]), C.size_t(n))
-		in := C.ZSTD_inBuffer{src: z.in, size: C.size_t(n), pos: 0}
-		for in.pos < in.size {
-			out := C.ZSTD_outBuffer{dst: z.out, size: C.size_t(z.outCap), pos: 0}
-			rc := C.ZSTD_compressStream2(z.cctx, &out, &in, C.ZSTD_e_continue)
-			if C.ZSTD_isError(rc) != 0 {
-				z.err = fmt.Errorf("libzstd: compress: %s", C.GoString(C.ZSTD_getErrorName(rc)))
-				return total, z.err
-			}
-			if err := z.emit(out.pos); err != nil {
-				z.err = err
+		if z.endWithData && z.pending > 0 {
+			if err := z.compressPending(z.pending); err != nil {
 				return total, err
 			}
+			z.pending = 0
+		}
+		C.memcpy(z.in, unsafe.Pointer(&p[0]), C.size_t(n))
+		if z.endWithData {
+			z.pending = n
+		} else if err := z.compressPending(n); err != nil {
+			return total, err
 		}
 		p = p[n:]
 		total += n
@@ -190,10 +228,15 @@ func (z *writer) Close() error {
 	if z.err != nil {
 		return z.err
 	}
-	in := C.ZSTD_inBuffer{src: z.in, size: 0, pos: 0}
-	for {
+	size := 0
+	if z.endWithData && z.pending > 0 {
+		size = z.pending
+	}
+	in := C.ZSTD_inBuffer{src: z.in, size: C.size_t(size), pos: 0}
+	var rc C.size_t = 1 // force the first iteration
+	for in.pos < in.size || rc != 0 {
 		out := C.ZSTD_outBuffer{dst: z.out, size: C.size_t(z.outCap), pos: 0}
-		rc := C.ZSTD_compressStream2(z.cctx, &out, &in, C.ZSTD_e_end)
+		rc = C.ZSTD_compressStream2(z.cctx, &out, &in, C.ZSTD_e_end)
 		if C.ZSTD_isError(rc) != 0 {
 			z.err = fmt.Errorf("libzstd: finish: %s", C.GoString(C.ZSTD_getErrorName(rc)))
 			return z.err
@@ -202,10 +245,8 @@ func (z *writer) Close() error {
 			z.err = err
 			return err
 		}
-		if rc == 0 {
-			return nil
-		}
 	}
+	return nil
 }
 
 func (z *writer) free() {

@@ -71,7 +71,13 @@ type ZstdParams struct {
 	SingleSegment bool `json:"single_segment"` // frame has no window descriptor
 	Workers       int  `json:"workers"`        // 0: single-thread path, 1: job-based path
 	Long          bool `json:"long,omitempty"` // long distance matching
-	EncodeAll     bool `json:"encode_all,omitempty"`
+	// EndWithData records that the producer passed its final input chunk
+	// together with the end directive (known-size producers such as the
+	// zstd CLI reading a file). When false, end was signalled after all
+	// input, which makes libzstd emit an empty last block. Single-thread
+	// path only.
+	EndWithData bool `json:"end_with_data,omitempty"`
+	EncodeAll   bool `json:"encode_all,omitempty"`
 }
 
 // ZstdEngine produces complete zstd frames.

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"errors"
+	"io"
 	"testing"
 
 	"github.com/klauspost/compress/zstd"
@@ -132,6 +133,79 @@ func TestZstdFrameLengthStopsAtFirstFrame(t *testing.T) {
 	}
 	if n != int64(len(a)) {
 		t.Fatalf("length %d, want %d", n, len(a))
+	}
+}
+
+func TestZstdFrameLengthEmptyLastBlock(t *testing.T) {
+	orig := zstdStream(t, sample(300000))
+
+	h, n, err := ZstdFrameLength(bufio.NewReader(bytes.NewReader(orig)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.EmptyLastBlock {
+		t.Fatal("original frame reported EmptyLastBlock")
+	}
+	if n != int64(len(orig)) {
+		t.Fatalf("length %d, want %d", n, len(orig))
+	}
+
+	// Walk the blocks by hand to find the header of the block currently
+	// carrying the last-block flag.
+	r := bufio.NewReader(bytes.NewReader(orig))
+	hdr, err := ParseZstdFrameHeader(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pos := hdr.HeaderLen
+	lastHeaderPos := -1
+	for {
+		var bh [3]byte
+		if _, err := io.ReadFull(r, bh[:]); err != nil {
+			t.Fatal(err)
+		}
+		v := uint32(bh[0]) | uint32(bh[1])<<8 | uint32(bh[2])<<16
+		last := v&1 != 0
+		size := int(v >> 3)
+		if (v>>1)&3 == 1 { // RLE block: one byte on disk
+			size = 1
+		}
+		lastHeaderPos = pos
+		pos += 3 + size
+		if _, err := r.Discard(size); err != nil {
+			t.Fatal(err)
+		}
+		if last {
+			break
+		}
+	}
+
+	// Clear the last-flag bit on that block, then splice in an empty raw
+	// last block (0x01, 0x00, 0x00: last=1, type=raw, size=0) right after
+	// it, before the checksum (if any).
+	modified := append([]byte{}, orig[:lastHeaderPos]...)
+	modified = append(modified, orig[lastHeaderPos]&^0x01)
+	modified = append(modified, orig[lastHeaderPos+1:pos]...)
+	modified = append(modified, 0x01, 0x00, 0x00)
+	modified = append(modified, orig[pos:]...)
+
+	h2, n2, err := ZstdFrameLength(bufio.NewReader(bytes.NewReader(modified)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !h2.EmptyLastBlock {
+		t.Fatal("modified frame did not report EmptyLastBlock")
+	}
+	if n2 != int64(len(modified)) {
+		t.Fatalf("length %d, want %d", n2, len(modified))
+	}
+
+	h3, _, err := ZstdFrameLength(bufio.NewReader(bytes.NewReader(zstdAll(t, nil, zstd.WithEncoderCRC(true)))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h3.EmptyLastBlock {
+		t.Fatal("single-block empty-input frame reported EmptyLastBlock")
 	}
 }
 

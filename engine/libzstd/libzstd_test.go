@@ -55,6 +55,71 @@ func TestCandidateTiers(t *testing.T) {
 	}
 }
 
+func TestEndWithDataDropsEmptyLastBlock(t *testing.T) {
+	data := fixtures.Mixed(3 << 20)
+	a := enginetest.Zstd(t, New(), engine.ZstdParams{Level: 3, Workers: 0, PledgedSize: true, ContentSize: true, EndWithData: true}, data)
+	b := enginetest.Zstd(t, New(), engine.ZstdParams{Level: 3, Workers: 0, PledgedSize: true, ContentSize: true, EndWithData: false}, data)
+	if len(b) != len(a)+3 {
+		t.Fatalf("len(a)=%d len(b)=%d, want len(b) == len(a)+3", len(a), len(b))
+	}
+
+	ha, _, err := format.ZstdFrameLength(bufioReader(a))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ha.EmptyLastBlock {
+		t.Fatal("EndWithData: true reported EmptyLastBlock")
+	}
+	hb, _, err := format.ZstdFrameLength(bufioReader(b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hb.EmptyLastBlock {
+		t.Fatal("EndWithData: false did not report EmptyLastBlock")
+	}
+
+	dec, _ := zstd.NewReader(nil)
+	defer dec.Close()
+	for name, frame := range map[string][]byte{"a": a, "b": b} {
+		back, err := dec.DecodeAll(frame, nil)
+		if err != nil || !bytes.Equal(back, data) {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+}
+
+func TestCandidatesUseEmptyLastBlock(t *testing.T) {
+	check := func(t *testing.T, h *format.ZstdFrameHeader, want bool) {
+		t.Helper()
+		for _, tier := range New().Candidates(h, 1000) {
+			for _, p := range tier {
+				if p.Workers == 1 && p.EndWithData {
+					t.Fatalf("workers-1 candidate has EndWithData: true: %+v", p)
+				}
+				if p.Workers == 0 && p.EndWithData != want {
+					t.Fatalf("workers-0 candidate EndWithData=%v, want %v: %+v", p.EndWithData, want, p)
+				}
+			}
+		}
+	}
+	check(t, &format.ZstdFrameHeader{Checksum: true, HasContentSize: true, WindowLog: 21, EmptyLastBlock: true}, false)
+	check(t, &format.ZstdFrameHeader{Checksum: true, HasContentSize: true, WindowLog: 21, EmptyLastBlock: false}, true)
+}
+
+func TestCandidatesLongForSingleSegment(t *testing.T) {
+	tiers := New().Candidates(&format.ZstdFrameHeader{SingleSegment: true, HasContentSize: true, Checksum: true}, 1000)
+	found := false
+	for _, p := range tiers[1] {
+		if p.Long && p.WindowLog == 27 {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("single-segment header should add tier 2 long candidates with WindowLog 27")
+	}
+}
+
 func TestOutputDecodes(t *testing.T) {
 	data := fixtures.Mixed(400000)
 	dec, _ := zstd.NewReader(nil)
@@ -128,13 +193,20 @@ func TestRoundTrip(t *testing.T) {
 	var params []engine.ZstdParams
 	for _, l := range []int{1, 3, 9, 19, -3} {
 		for _, w := range []int{0, 1} {
+			// Candidates always sets EndWithData = !h.EmptyLastBlock for
+			// Workers == 0 candidates; a header built without walking the
+			// blocks (as this helper does) never reports EmptyLastBlock, so
+			// the reference must be built the same way for the search to be
+			// able to rediscover it.
 			params = append(params,
-				engine.ZstdParams{Level: l, Workers: w, Checksum: true, ContentSize: true, PledgedSize: true},
-				engine.ZstdParams{Level: l, Workers: w},
+				engine.ZstdParams{Level: l, Workers: w, Checksum: true, ContentSize: true, PledgedSize: true, EndWithData: w == 0},
+				engine.ZstdParams{Level: l, Workers: w, EndWithData: w == 0},
 			)
 		}
 	}
-	params = append(params, engine.ZstdParams{Level: 5, Long: true, WindowLog: 27, Checksum: true})
+	params = append(params, engine.ZstdParams{Level: 5, Long: true, WindowLog: 27, Checksum: true, EndWithData: true})
+	params = append(params, engine.ZstdParams{Level: 3, Workers: 0, PledgedSize: true, ContentSize: true, EndWithData: true})
+	params = append(params, engine.ZstdParams{Level: 5, Long: true, WindowLog: 27, PledgedSize: true, ContentSize: true, Checksum: true})
 	enginetest.RoundTripZstd(t, New(), params, fixtures.Small())
 }
 

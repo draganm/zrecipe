@@ -143,20 +143,10 @@ func TestWildZstd(t *testing.T) {
 		}
 		for _, args := range variants {
 			name := filepath.Join(args...)
-			// mixed-3m written to a file picks up a pledged content size,
-			// and for these three variants no candidate in the search space
-			// reproduces the resulting frame byte-for-byte. The same
-			// variants from stdin, and every other fixture/variant/source
-			// combination, are reproducible. See plan Task 15 report.
-			fileNotReproducible := f.Name == "mixed-3m" &&
-				(name == "-3/--single-thread" || name == "-3/--long" || name == "-9/--long=27")
 			t.Run(f.Name+"/stdin/"+name, func(t *testing.T) {
 				check(t, run(t, f.Data, "", "zstd", append([]string{"-c", "-q"}, args...)...), f.Data)
 			})
 			t.Run(f.Name+"/file/"+name, func(t *testing.T) {
-				if fileNotReproducible {
-					t.Skip("known: zstd " + f.Name + " file " + name + " not reproducible, see plan Task 15 report")
-				}
 				out := filepath.Join(dir, "out.zst")
 				os.Remove(out)
 				run(t, nil, out, "zstd", append([]string{"-q", "-f", "-o", out}, append(args, src)...)...)
