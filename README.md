@@ -86,7 +86,9 @@ decompressed content to a temp file once they exceed `Options.MaxInMemory`
 under that bound (see Testing below).
 
 `ReadParams` decodes and validates a `Params` document read back from JSON,
-rejecting an unknown schema version with `ErrParamsVersion`.
+rejecting an unknown schema version with `ErrParamsVersion` and an
+internally inconsistent document — malformed digest hex, or a `gzip`/`zstd`
+section that does not match `format` — with `ErrInvalidParams`.
 
 ## CLI usage
 
@@ -136,6 +138,17 @@ version, `v1.20.0` at the time of writing. Build info carries no module
 version inside a `go test` binary, so the klauspost engines report
 `(devel)` there; `Recompress` treats that like any other version string.
 `go-flate`'s version is whatever Go toolchain built the binary.
+
+**Version granularity.** `go-flate` is versioned by the full Go release
+(`runtime.Version()`, e.g. `go1.22.3`), not just the major/minor line, so
+even a Go *patch* release changes `engine_version` and makes `Recompress`
+refuse a `Params` document made with a different patch release unless
+`AllowVersionMismatch` (`--allow-version-mismatch` on the CLI) is set — the
+digest check still decides whether the attempt actually reproduces the
+file. The klauspost engines report `(devel)` not only from a `go test`
+binary but from any build where `debug.ReadBuildInfo()` cannot resolve a
+concrete version for the module, such as a Go workspace (`go.work`) build
+that replaces it with a local checkout.
 
 Different implementations produce different bytes at the same nominal
 level, and libzstd's output changes between releases while zlib's has been
@@ -214,13 +227,18 @@ section:
 zero-valued or false; they, along with the always-present `workers`, cover
 long-distance matching mode, an explicit window size, and klauspost's
 one-shot `EncodeAll` encoding path. `end_with_data` is an addition beyond
-the original design: it records that the producer passed its final chunk
-of input together with the zstd end directive, which is what a known-size
-producer such as the zstd CLI reading a file does. The frame reveals this
-by the absence of an empty last block; when a producer instead signals the
-end only after all input has already been written (as it must when it does
-not know the size up front), that empty last block is present and
-`end_with_data` is `false`.
+the original design. It does not record what the producer did — comp-prysm
+has no way to observe that — but what the frame itself shows: whether the
+last block is non-empty (`true`) or an explicit empty block trails the data
+(`false`). A known-size producer such as the zstd CLI reading a file
+typically yields the non-empty shape by passing its final chunk of input
+together with the end directive; a producer that only learns end-of-input
+later must call end separately once there is nothing left to flush,
+leaving that trailing empty block. For input that is not aligned to zstd's
+block size, though, there is always unflushed data buffered when end is
+signalled, so the last block comes out non-empty regardless of which way
+the producer called it — the two directives converge on the same frame,
+and `end_with_data` reads `true` either way.
 
 ## Limitations
 
@@ -234,6 +252,12 @@ check still decides whether the attempt actually succeeded.
 `Analyze` recognises but does not handle four kinds of input, all returned
 as `ErrUnsupported`: multi-member gzip files, multi-frame zstd files, zstd
 skippable frames, and zstd frames built against a dictionary.
+
+`Analyze`'s zstd decoder is bounded only by the window size declared in the
+frame header, up to zstd's own maximum of 2 GiB (`WithDecoderMaxWindow`).
+An untrusted zstd input can therefore make decompression demand up to that
+much memory for its window alone; callers decompressing files from
+untrusted sources should account for this.
 
 When the `klauspost-zstd` engine produces a single-segment frame (one
 without a window descriptor) or uses its one-shot `EncodeAll` path, it must
