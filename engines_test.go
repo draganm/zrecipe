@@ -10,10 +10,10 @@ func TestDefaultEnginesOrderAndNames(t *testing.T) {
 			t.Errorf("%s has empty version", e.Name())
 		}
 	}
-	// want is cgoEngines()'s names (zlib, libzstd when built with cgo; none
-	// otherwise) followed by the three pure-Go engines, so this test passes
-	// under both the cgo and CGO_ENABLED=0 build lanes.
-	var want []string
+	// want is gnu-gzip, then cgoEngines()'s names (zlib, libzstd when built
+	// with cgo; none otherwise), then the other pure-Go engines, so this
+	// test passes under both the cgo and CGO_ENABLED=0 build lanes.
+	want := []string{"gnu-gzip"}
 	for _, e := range cgoEngines() {
 		want = append(want, e.Name())
 	}

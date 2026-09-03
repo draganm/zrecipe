@@ -70,11 +70,11 @@ func check(t *testing.T, file, data []byte) {
 }
 
 // skipWithoutCgoEngines skips a wild-fixture test when built without cgo.
-// These fixtures are made by real-world compressors (GNU gzip, pigz, the
-// zstd CLI); reproducing them byte-for-byte is only realistic against the
-// matching cgo engine (zlib, libzstd) that shares their implementation, so
-// without cgo almost every case is unreproducible and the test would fail
-// for a reason unrelated to whatever it's meant to check.
+// The pigz and zstd CLI fixtures are reproducible only against the matching
+// cgo engine (zlib, libzstd) that shares their implementation, so without
+// cgo almost every case is unreproducible and the test would fail for a
+// reason unrelated to whatever it's meant to check. GNU gzip fixtures are
+// covered by the pure-Go gnu-gzip engine and do not use this.
 func skipWithoutCgoEngines(t *testing.T) {
 	t.Helper()
 	if len(cgoEngines()) == 0 {
@@ -93,8 +93,9 @@ func wildInputs() []fixtures.Fixture {
 	}
 }
 
+// TestWildGzip needs no cgo: the pure-Go gnu-gzip engine reproduces GNU
+// gzip at every level, on every fixture, from a file and from stdin.
 func TestWildGzip(t *testing.T) {
-	skipWithoutCgoEngines(t)
 	tool(t, "gzip")
 	for _, f := range wildInputs() {
 		dir := t.TempDir()
@@ -102,22 +103,13 @@ func TestWildGzip(t *testing.T) {
 		os.WriteFile(src, f.Data, 0o644)
 		for level := 1; level <= 9; level++ {
 			lvl := "-" + string(rune('0'+level))
-			// text-1m (and text-1000003, its non-block-aligned twin) levels
-			// 1-7 and every mixed-3m level: no zlib candidate in the search
-			// space reproduces GNU gzip's output byte-for-byte. See plan
-			// Task 15 report.
-			isText1m := f.Name == "text-1m" || f.Name == "text-1000003"
-			notReproducible := f.Name == "mixed-3m" || (isText1m && level <= 7)
 			t.Run(f.Name+"/stdin"+lvl, func(t *testing.T) {
-				if notReproducible {
-					t.Skip("known: gzip " + f.Name + " level " + lvl + " not reproducible, see plan Task 15 report")
-				}
 				check(t, run(t, f.Data, "", "gzip", "-c", lvl), f.Data)
 			})
+			t.Run(f.Name+"/rsyncable"+lvl, func(t *testing.T) {
+				check(t, run(t, f.Data, "", "gzip", "-c", "--rsyncable", lvl), f.Data)
+			})
 			t.Run(f.Name+"/file"+lvl, func(t *testing.T) {
-				if notReproducible {
-					t.Skip("known: gzip " + f.Name + " level " + lvl + " not reproducible, see plan Task 15 report")
-				}
 				out := src + ".gz"
 				os.Remove(out)
 				run(t, nil, out, "gzip", "-k", lvl, src)

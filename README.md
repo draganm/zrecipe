@@ -25,9 +25,9 @@ go build ./cmd/comp-prysm
 
 Everything below assumes commands run inside `nix develop` (or
 `nix develop --command ...` from outside it). The library also builds
-without cgo, in which case only the three pure-Go engines, `go-flate`,
-`klauspost-flate` and `klauspost-zstd`, are available and `zlib`/`libzstd`
-are absent from `DefaultEngines()`.
+without cgo, in which case only the four pure-Go engines, `gnu-gzip`,
+`go-flate`, `klauspost-flate` and `klauspost-zstd`, are available and
+`zlib`/`libzstd` are absent from `DefaultEngines()`.
 
 ## Library usage
 
@@ -124,11 +124,20 @@ defaults described above.
 
 | Name | Format | Binding | Version source |
 |---|---|---|---|
+| `gnu-gzip` | gzip | pure-Go port of GNU gzip's compressor | the ported release, `1.14` |
 | `zlib` | gzip | cgo, system zlib | `zlibVersion()` |
 | `libzstd` | zstd | cgo, system libzstd | `ZSTD_versionString()` |
 | `go-flate` | gzip | stdlib `compress/flate` | `runtime.Version()` |
 | `klauspost-flate` | gzip | `github.com/klauspost/compress/flate` | module version from `debug.ReadBuildInfo()` |
 | `klauspost-zstd` | zstd | `github.com/klauspost/compress/zstd` | module version from `debug.ReadBuildInfo()` |
+
+`gnu-gzip` is a line-by-line port of the compressor in GNU gzip 1.14
+(`deflate.c`, `trees.c` and `bits.c`) and produces exactly the bytes the
+`gzip` program writes when it compresses a regular file, at every level
+and with `--rsyncable`. It is listed first in `DefaultEngines()` because
+GNU gzip is the most common producer of gzip files in the wild, and because
+a pure-Go engine keeps the resulting Params usable from a binary built
+without cgo. The ported files are GPL-licensed; see License below.
 
 The two cgo engines are present only in binaries built with cgo enabled.
 Against the versions pinned by this repository's flake, `zlib` reports
@@ -137,7 +146,9 @@ Against the versions pinned by this repository's flake, `zlib` reports
 version, `v1.20.0` at the time of writing. Build info carries no module
 version inside a `go test` binary, so the klauspost engines report
 `(devel)` there; `Recompress` treats that like any other version string.
-`go-flate`'s version is whatever Go toolchain built the binary.
+`go-flate`'s version is whatever Go toolchain built the binary. `gnu-gzip`
+reports the GNU gzip release it ports; that string only changes if a change
+to the port alters its output.
 
 **Version granularity.** `go-flate` is versioned by the full Go release
 (`runtime.Version()`, e.g. `go1.22.3`), not just the major/minor line, so
@@ -192,7 +203,8 @@ byte of the deflate stream, so mtime, filename, OS byte, XFL and every
 optional field come back exact without needing to be parsed individually.
 `strategy` is meaningful only for the `zlib` engine (`default`, `filtered`,
 `huffman_only`, `rle` or `fixed`); the pure-Go engines omit it because they
-have no equivalent knob.
+have no equivalent knob. `rsyncable` is meaningful only for `gnu-gzip` and
+records that the file was made with `gzip --rsyncable`.
 
 The same file compressed with the `zstd` CLI instead produces a `zstd`
 section:
@@ -277,16 +289,20 @@ A spike against this repository's flake-pinned tools (zstd CLI 1.5.7, GNU
 gzip 1.14, pigz 2.8) found that the zstd CLI reproduces in all 96 tested
 variants — levels 1 through 22, `--fast`, `-T0`/`-T1`/`-T4`,
 `--single-thread`, `--no-check`, `--long`, from both stdin and a file. GNU
-gzip reproduces only at levels 8 and 9 on plain text input, and on inputs
-small enough that several parameter tuples happen to coincide on the same
-bytes; at other levels, and on more heterogeneous content, it uses a
-block-flush heuristic that zlib's parameter grid does not model, so it
-would need its own engine and is not supported in v1. pigz is not
-reproduced on real-sized input for any tested level or worker count; its
-parallel block splitting produces byte streams no single-stream zlib
-candidate matches, so it too would need its own engine and is out of scope
-for v1. Files produced by zlib itself, Go's `compress/gzip`, and both
-klauspost engines are reproduced.
+gzip reproduces at every level, with and without `--rsyncable`, through
+the `gnu-gzip` engine; zlib alone matched it only at levels 8 and 9 on
+plain text, because gzip ends deflate blocks with its own heuristic. One
+caveat: `gnu-gzip` models gzip reading a regular file, where every
+`read(2)` returns the full amount asked for. gzip reading from a pipe can
+get short reads, which shift the point where its window slides; that
+changes the output only when the last few hundred bytes of input fall in
+the region where gzip stops matching, or when a final match runs past the
+end of input into stale window bytes, and in those cases gzip's own
+pipe output is timing-dependent. pigz is not reproduced on real-sized
+input for any tested level or worker count; its parallel block splitting
+produces byte streams no single-stream candidate matches, so it would need
+its own engine and is out of scope for v1. Files produced by zlib itself,
+Go's `compress/gzip`, and both klauspost engines are reproduced.
 
 ## Testing
 
@@ -301,10 +317,29 @@ gigabytes of scratch disk:
 COMP_PRYSM_LARGE=1 go test . -run LargeInput -v -timeout 30m
 ```
 
+## License
+
+comp-prysm is licensed under the GNU Affero General Public License,
+version 3 or later; see `LICENSE`. The `engine/gnugzip` package contains
+code ported from GNU gzip, which is licensed under the GNU General Public
+License, version 3 or later; those files keep their upstream copyright
+notices and `engine/gnugzip/COPYING` holds that license. Section 13 of
+each license permits combining the two: the ported files remain under the
+GPL, the rest of the project is under the AGPL, and the AGPL's
+network-interaction terms apply to the AGPL-covered parts. Every other
+dependency is under a permissive license (BSD-3-Clause, MIT or the zlib
+license) that is compatible with both.
+
+In practice this means a program that imports comp-prysm must itself be
+distributed under AGPL-compatible terms, and one that offers it as a
+network service must offer its source to the users of that service.
+
 ## Design and plan
 
 The full design, including the search algorithm, the candidate grids for
 each engine, and the spike results that shaped the limitations above, lives
-at `docs/superpowers/specs/2026-09-03-comp-prysm-design.md`. The
+at `docs/superpowers/specs/2026-09-03-comp-prysm-design.md`, with the GNU
+gzip engine and the AGPL relicensing in
+`docs/superpowers/specs/2026-09-03-gnu-gzip-engine-design.md`. The
 implementation plan that built this library task by task lives at
 `docs/superpowers/plans/2026-09-03-comp-prysm.md`.

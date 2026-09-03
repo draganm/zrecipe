@@ -32,8 +32,8 @@ func (*Engine) Candidates(h *format.GzipHeader, _ int64) [][]engine.DeflateParam
 }
 
 func (*Engine) NewWriter(w io.Writer, p engine.DeflateParams) (io.WriteCloser, error) {
-	if p.Strategy != "" || p.WindowBits != 0 || p.MemLevel != 0 {
-		return nil, errors.New("go-flate: strategy, window_bits and mem_level are not supported")
+	if p.Strategy != "" || p.WindowBits != 0 || p.MemLevel != 0 || p.Rsyncable {
+		return nil, errors.New("go-flate: strategy, window_bits, mem_level and rsyncable are not supported")
 	}
 	return flate.NewWriter(w, p.Level)
 }

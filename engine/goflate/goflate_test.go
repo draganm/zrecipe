@@ -24,9 +24,12 @@ func TestCandidatesFollowXFL(t *testing.T) {
 	}
 }
 
-func TestRejectsZlibOnlyParams(t *testing.T) {
+func TestRejectsOtherEnginesParams(t *testing.T) {
 	if _, err := New().NewWriter(nil, engine.DeflateParams{Level: 6, MemLevel: 8}); err == nil {
 		t.Fatal("expected error for mem_level")
+	}
+	if _, err := New().NewWriter(nil, engine.DeflateParams{Level: 6, Rsyncable: true}); err == nil {
+		t.Fatal("expected error for rsyncable")
 	}
 }
 

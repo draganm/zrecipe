@@ -65,7 +65,7 @@ func TestAnalyzeThenRecompress(t *testing.T) {
 		t.Fatal("uncompressed output differs")
 	}
 	pj, _ := os.ReadFile(params)
-	if !strings.Contains(string(pj), `"engine": "go-flate"`) && !strings.Contains(string(pj), `"engine": "zlib"`) {
+	if !strings.Contains(string(pj), `"engine": "go-flate"`) && !strings.Contains(string(pj), `"engine": "zlib"`) && !strings.Contains(string(pj), `"engine": "gnu-gzip"`) {
 		t.Fatalf("params: %s", pj)
 	}
 	rebuilt := filepath.Join(dir, "out.gz")

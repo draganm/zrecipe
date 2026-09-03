@@ -44,6 +44,7 @@ type DeflateParams struct {
 	Strategy   string `json:"strategy,omitempty"`    // zlib only
 	WindowBits int    `json:"window_bits,omitempty"` // zlib only: 9..15
 	MemLevel   int    `json:"mem_level,omitempty"`   // zlib only: 1..9
+	Rsyncable  bool   `json:"rsyncable,omitempty"`   // gnu-gzip only: --rsyncable
 }
 
 // GzipParams is DeflateParams plus the verbatim gzip header.

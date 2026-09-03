@@ -96,6 +96,9 @@ type writer struct {
 }
 
 func (*Engine) NewWriter(w io.Writer, p engine.DeflateParams) (io.WriteCloser, error) {
+	if p.Rsyncable {
+		return nil, errors.New("zlib: rsyncable is not supported")
+	}
 	strategy := p.Strategy
 	if strategy == "" {
 		strategy = engine.StrategyDefault
