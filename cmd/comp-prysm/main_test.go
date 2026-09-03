@@ -116,12 +116,22 @@ func TestRecompressFailureLeavesNoOutput(t *testing.T) {
 	gz := filepath.Join(dir, "in.gz")
 	os.WriteFile(gz, enginetest.Gzip(t, goflate.New(), engine.DeflateParams{Level: 6}, data), 0o644)
 	params := filepath.Join(dir, "params.json")
-	runApp(t, "analyze", "--params", params, gz)
+	if _, err := runApp(t, "analyze", "--params", params, gz); err != nil {
+		t.Fatalf("analyze: %v", err)
+	}
 	wrong := filepath.Join(dir, "wrong")
 	os.WriteFile(wrong, []byte("not the content"), 0o644)
 	rebuilt := filepath.Join(dir, "out.gz")
-	if _, err := runApp(t, "recompress", "--params", params, wrong, rebuilt); err == nil {
+	_, err := runApp(t, "recompress", "--params", params, wrong, rebuilt)
+	if err == nil {
 		t.Fatal("expected failure")
+	}
+	// The error must actually be the uncompressed-input mismatch (the
+	// ErrInputMismatch text), not merely some other failure that happens to
+	// leave no output: this is what makes the test unable to pass by
+	// accident.
+	if !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("expected an input-mismatch error, got: %v", err)
 	}
 	if _, err := os.Stat(rebuilt); err == nil {
 		t.Fatal("output must not exist after failure")
