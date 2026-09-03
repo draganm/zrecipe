@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"sync"
 	"testing"
 
@@ -65,6 +66,35 @@ func input(t *testing.T, content []byte, level int, concurrent bool) *Input {
 		Spool:            sp,
 		UncompressedSize: int64(len(content)),
 	}
+}
+
+// errDeflate fails every NewWriter call with a fixed, non-mismatch error.
+type errDeflate struct {
+	err error
+}
+
+func (e *errDeflate) Name() string          { return "err" }
+func (e *errDeflate) Version() string       { return "1" }
+func (e *errDeflate) Format() engine.Format { return engine.FormatGzip }
+func (e *errDeflate) Candidates(*format.GzipHeader, int64) [][]engine.DeflateParams {
+	return nil
+}
+func (e *errDeflate) NewWriter(w io.Writer, p engine.DeflateParams) (io.WriteCloser, error) {
+	return nil, e.err
+}
+
+// cancelDeflate fails every NewWriter call with context.Canceled, simulating
+// a candidate that was cancelled rather than one whose output mismatched.
+type cancelDeflate struct{}
+
+func (c *cancelDeflate) Name() string          { return "cancel" }
+func (c *cancelDeflate) Version() string       { return "1" }
+func (c *cancelDeflate) Format() engine.Format { return engine.FormatGzip }
+func (c *cancelDeflate) Candidates(*format.GzipHeader, int64) [][]engine.DeflateParams {
+	return nil
+}
+func (c *cancelDeflate) NewWriter(w io.Writer, p engine.DeflateParams) (io.WriteCloser, error) {
+	return nil, context.Canceled
 }
 
 func candidates(e engine.Engine, levels ...int) []Candidate {
@@ -149,5 +179,33 @@ func TestRunTrailerMismatch(t *testing.T) {
 	_, err := Run(context.Background(), in, candidates(e, 3), 1)
 	if !errors.Is(err, ErrNoMatch) {
 		t.Fatalf("got %v", err)
+	}
+}
+
+func TestRunNoMatchIncludesNonMismatchError(t *testing.T) {
+	e := &fakeDeflate{}
+	be := &errDeflate{err: errors.New("boom")}
+	ce := &cancelDeflate{}
+	cands := []Candidate{
+		{Engine: e, Deflate: &engine.DeflateParams{Level: 0}},
+		{Engine: be, Deflate: &engine.DeflateParams{Level: 1}},
+		{Engine: ce, Deflate: &engine.DeflateParams{Level: 2}},
+		{Engine: e, Deflate: &engine.DeflateParams{Level: 3}},
+	}
+	// No candidate produces level 9's prefix, so every fakeDeflate candidate
+	// mismatches; errDeflate and cancelDeflate always fail NewWriter.
+	_, err := Run(context.Background(), input(t, []byte("content"), 9, false), cands, 1)
+	if !errors.Is(err, ErrNoMatch) {
+		t.Fatalf("got %v", err)
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "boom") {
+		t.Fatalf("expected error message to contain injected error, got %q", msg)
+	}
+	if strings.Contains(msg, ErrMismatch.Error()) {
+		t.Fatalf("message should not include mismatch details: %q", msg)
+	}
+	if strings.Contains(msg, context.Canceled.Error()) {
+		t.Fatalf("message should not include cancellation details: %q", msg)
 	}
 }
