@@ -21,7 +21,7 @@
           '';
           hardeningDisable = [ "all" ];
 
-          packages = with pkgs; [ go ];
+          packages = with pkgs; [ go pkg-config zlib zlib.dev zstd zstd.dev gzip pigz ];
         };
       });
     };
