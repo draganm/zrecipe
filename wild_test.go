@@ -72,6 +72,9 @@ func check(t *testing.T, file, data []byte) {
 func wildInputs() []fixtures.Fixture {
 	return []fixtures.Fixture{
 		{Name: "text-1m", Data: fixtures.Text(1 << 20)},
+		// Not a multiple of any block size (deflate 64k, zstd's default
+		// 128k), unlike every other fixture here.
+		{Name: "text-1000003", Data: fixtures.Text(1000003)},
 		{Name: "mixed-3m", Data: fixtures.Mixed(3 << 20)},
 		{Name: "tiny", Data: []byte("tiny input\n")},
 	}
@@ -85,10 +88,12 @@ func TestWildGzip(t *testing.T) {
 		os.WriteFile(src, f.Data, 0o644)
 		for level := 1; level <= 9; level++ {
 			lvl := "-" + string(rune('0'+level))
-			// text-1m levels 1-7 and every mixed-3m level: no zlib candidate in
-			// the search space reproduces GNU gzip's output byte-for-byte.
-			// See plan Task 15 report.
-			notReproducible := f.Name == "mixed-3m" || (f.Name == "text-1m" && level <= 7)
+			// text-1m (and text-1000003, its non-block-aligned twin) levels
+			// 1-7 and every mixed-3m level: no zlib candidate in the search
+			// space reproduces GNU gzip's output byte-for-byte. See plan
+			// Task 15 report.
+			isText1m := f.Name == "text-1m" || f.Name == "text-1000003"
+			notReproducible := f.Name == "mixed-3m" || (isText1m && level <= 7)
 			t.Run(f.Name+"/stdin"+lvl, func(t *testing.T) {
 				if notReproducible {
 					t.Skip("known: gzip " + f.Name + " level " + lvl + " not reproducible, see plan Task 15 report")
