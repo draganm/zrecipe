@@ -19,7 +19,7 @@ import (
 // The reader is a named field, not embedded, so ReadAt is not promoted.
 type seekOnly struct{ r *bytes.Reader }
 
-func (s seekOnly) Read(p []byte) (int, error)                 { return s.r.Read(p) }
+func (s seekOnly) Read(p []byte) (int, error)                { return s.r.Read(p) }
 func (s seekOnly) Seek(off int64, whence int) (int64, error) { return s.r.Seek(off, whence) }
 
 func analyze(t *testing.T, file []byte, opts *Options) *Params {
