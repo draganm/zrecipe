@@ -85,6 +85,25 @@ func TestConcurrencyDoesNotChangeOutput(t *testing.T) {
 	}
 }
 
+// TestAllWriterCloseIdempotent proves a second Close on the single-segment
+// (EncodeAll) writer path is a no-op instead of re-encoding and writing the
+// frame a second time.
+func TestAllWriterCloseIdempotent(t *testing.T) {
+	var buf bytes.Buffer
+	w, err := New().NewWriter(&buf, engine.ZstdParams{Level: 1, SingleSegment: true}, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Write([]byte("hello"))
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	first := buf.Len()
+	if err := w.Close(); err != nil || buf.Len() != first {
+		t.Fatalf("second close: err=%v, wrote %d more bytes", err, buf.Len()-first)
+	}
+}
+
 func TestRoundTrip(t *testing.T) {
 	var params []engine.ZstdParams
 	for l := 1; l <= 4; l++ {

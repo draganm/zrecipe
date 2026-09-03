@@ -100,9 +100,10 @@ func (*Engine) NewWriter(w io.Writer, p engine.ZstdParams, uncompressedSize int6
 
 // allWriter buffers the input and encodes it in one EncodeAll call on Close.
 type allWriter struct {
-	w   io.Writer
-	enc *zstd.Encoder
-	buf []byte
+	w      io.Writer
+	enc    *zstd.Encoder
+	buf    []byte
+	closed bool
 }
 
 func (a *allWriter) Write(p []byte) (int, error) {
@@ -111,6 +112,10 @@ func (a *allWriter) Write(p []byte) (int, error) {
 }
 
 func (a *allWriter) Close() error {
+	if a.closed {
+		return nil
+	}
+	a.closed = true
 	defer a.enc.Close()
 	_, err := a.w.Write(a.enc.EncodeAll(a.buf, nil))
 	return err
