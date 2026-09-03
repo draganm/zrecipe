@@ -77,7 +77,10 @@ type ZstdParams struct {
 	// input, which makes libzstd emit an empty last block. Single-thread
 	// path only.
 	EndWithData bool `json:"end_with_data,omitempty"`
-	EncodeAll   bool `json:"encode_all,omitempty"`
+	// EncodeAll records that the klauspost-zstd engine used its one-shot
+	// EncodeAll encoding path (which buffers the whole input and encodes it
+	// in a single call) rather than its streaming writer.
+	EncodeAll bool `json:"encode_all,omitempty"`
 }
 
 // ZstdEngine produces complete zstd frames.
@@ -111,10 +114,14 @@ func ModuleVersion(path string) string {
 		if d.Path != path {
 			continue
 		}
+		v := d.Version
 		if d.Replace != nil {
-			return d.Replace.Version
+			v = d.Replace.Version
 		}
-		return d.Version
+		if v == "" {
+			return "(devel)"
+		}
+		return v
 	}
 	return "(devel)"
 }
