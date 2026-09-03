@@ -111,8 +111,10 @@ func RoundTripDeflate(t *testing.T, e engine.DeflateEngine, params []engine.Defl
 					t.Fatalf("search: %v", err)
 				}
 				again := Gzip(t, e, *res.Candidate.Deflate, f.Data)
-				if !bytes.Equal(again, file) {
-					t.Fatalf("found %+v but it does not reproduce the file", *res.Candidate.Deflate)
+				// Compare payload and trailer after the header (which may have different XFL).
+				// Gzip builds a fixed 10-byte header, same as len(hdr.Raw).
+				if !bytes.Equal(again[len(hdr.Raw):], file[len(hdr.Raw):]) {
+					t.Fatalf("found %+v but payload or trailer differs", *res.Candidate.Deflate)
 				}
 			})
 		}
