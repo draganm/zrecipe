@@ -191,7 +191,7 @@ func TestAnalyzeFlagsLastFails(t *testing.T) {
 
 func TestEngines(t *testing.T) {
 	out, err := runApp(t, "engines")
-	if err != nil || !strings.Contains(out, "go-flate") || !strings.Contains(out, "klauspost-zstd") {
+	if err != nil || !strings.Contains(out, "go-flate") || !strings.Contains(out, "pgzip") || !strings.Contains(out, "klauspost-zstd") {
 		t.Fatalf("%q %v", out, err)
 	}
 	// zlib/libzstd are present only in binaries built with cgo (this test
