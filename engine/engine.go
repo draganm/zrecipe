@@ -46,8 +46,11 @@ type DeflateParams struct {
 	MemLevel   int    `json:"mem_level,omitempty"`   // zlib only: 1..9
 	Rsyncable  bool   `json:"rsyncable,omitempty"`   // gnu-gzip and pigz: --rsyncable
 
+	// pigz and pgzip: the block the input is cut into, in KiB; 0 means the
+	// engine's default (pigz -b 128, pgzip 1024).
+	BlockSize int `json:"block_size,omitempty"`
+
 	// pigz only.
-	BlockSize    int  `json:"block_size,omitempty"`    // -b, in KiB; 0 means pigz's default of 128
 	Independent  bool `json:"independent,omitempty"`   // -i: blocks are compressed without the preceding history
 	SingleThread bool `json:"single_thread,omitempty"` // -p 1: pigz's single-thread code path, which flushes differently
 }

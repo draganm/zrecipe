@@ -25,9 +25,9 @@ go build ./cmd/zrecipe
 
 Everything below assumes commands run inside `nix develop` (or
 `nix develop --command ...` from outside it). The library also builds
-without cgo, in which case only the four pure-Go engines, `gnu-gzip`,
-`go-flate`, `klauspost-flate` and `klauspost-zstd`, are available and
-`zlib`/`libzstd` are absent from `DefaultEngines()`.
+without cgo, in which case only the five pure-Go engines, `gnu-gzip`,
+`go-flate`, `klauspost-flate`, `pgzip` and `klauspost-zstd`, are available
+and `zlib`, `pigz` and `libzstd` are absent from `DefaultEngines()`.
 
 ## Library usage
 
@@ -130,6 +130,7 @@ defaults described above.
 | `libzstd` | zstd | cgo, system libzstd | `ZSTD_versionString()` |
 | `go-flate` | gzip | stdlib `compress/flate` | `runtime.Version()` |
 | `klauspost-flate` | gzip | `github.com/klauspost/compress/flate` | module version from `debug.ReadBuildInfo()` |
+| `pgzip` | gzip | pure-Go port of klauspost/pgzip's writer over a copy of `klauspost/compress/flate` v1.11.3 | the ported releases, `1.2.6+klauspost-compress1.11.3` |
 | `klauspost-zstd` | zstd | `github.com/klauspost/compress/zstd` | module version from `debug.ReadBuildInfo()` |
 
 `gnu-gzip` is a line-by-line port of the compressor in GNU gzip 1.14
@@ -151,6 +152,23 @@ stream and flushes at the same boundaries; more threads reset per block),
 strategies. zopfli (`-11`) is not covered. Its version string names both
 the pigz release ported and the zlib linked, since the output depends on
 both.
+
+`pgzip` reproduces klauspost/pgzip, the parallel gzip written in Go that
+umoci compresses layers with, and through umoci rockcraft: every Canonical
+rock on Docker Hub, `ubuntu` included. pgzip cuts the input into 1 MiB
+blocks, compresses each with `klauspost/compress/flate` primed with the
+last 16 KiB of the block before it, sync-flushes after every block, and
+closes the stream after the last block, which it compresses even when
+empty. Those bytes depend on the klauspost/compress generation as much as
+on the scheme, and umoci pins v1.11.3, whose encoder differs from the
+v1.20.0 the `klauspost-flate` engine links. Go cannot load two versions of
+one module, so the engine drives a verbatim copy of that release's flate
+package (`engine/pgzip/flate`, BSD-licensed) and its version string names
+both the pgzip release ported and the klauspost/compress release copied.
+`block_size` covers callers of `SetConcurrency`. pgzip files are easy to
+recognise: OS byte 255 and, unless the producer set a modification time,
+an mtime of `0x886e0900` (the zero `time.Time` truncated to 32 bits),
+which the header captured in Params carries verbatim.
 
 The three cgo engines are present only in binaries built with cgo enabled.
 Against the versions pinned by this repository's flake, `zlib` reports
@@ -231,8 +249,10 @@ optional field come back exact without needing to be parsed individually.
 `strategy` is meaningful only for the `zlib` engine (`default`, `filtered`,
 `huffman_only`, `rle` or `fixed`); the pure-Go engines omit it because they
 have no equivalent knob. `rsyncable` records `--rsyncable` for `gnu-gzip`
-and `pigz`. `block_size` (in KiB), `independent` and `single_thread` are
-`pigz` only: its `-b`, `-i`, and the `-p 1` code path.
+and `pigz`. `block_size` (in KiB) is the block the input is cut into for
+`pigz` (`-b`, default 128) and `pgzip` (`SetConcurrency`, default 1024);
+`independent` and `single_thread` are `pigz` only: its `-i` and the `-p 1`
+code path.
 
 The same file compressed with the `zstd` CLI instead produces a `zstd`
 section:
@@ -330,7 +350,12 @@ pipe output is timing-dependent. pigz is reproduced through the `pigz`
 engine at every level, on both of its code paths, with `-i`, `-R` and `-b`;
 zlib alone matched only input that fits in a single pigz block. Files
 produced by zlib itself, Go's `compress/gzip`, and both klauspost engines
-are reproduced.
+are reproduced. klauspost/pgzip over klauspost/compress v1.11.3, the pair
+umoci and rockcraft ship, is reproduced through the `pgzip` engine at
+every level, block size and thread count; pgzip over other klauspost
+generations is not, since the encoder changed in v1.11.13 and again
+later, and those generations would each need their own copy of the flate
+package.
 
 ## Testing
 
@@ -354,9 +379,12 @@ License, version 3 or later; those files keep their upstream copyright
 notices and `engine/gnugzip/COPYING` holds that license. Section 13 of
 each license permits combining the two: the ported files remain under the
 GPL, the rest of the project is under the AGPL, and the AGPL's
-network-interaction terms apply to the AGPL-covered parts. Every other
-dependency is under a permissive license (BSD-3-Clause, MIT or the zlib
-license) that is compatible with both.
+network-interaction terms apply to the AGPL-covered parts. The
+`engine/pgzip/flate` package is a copy of `github.com/klauspost/compress`'s
+flate package at v1.11.3 under its BSD-3-Clause license, kept in
+`engine/pgzip/flate/LICENSE`. Every other dependency is under a permissive
+license (BSD-3-Clause, MIT or the zlib license) that is compatible with
+both.
 
 In practice this means a program that imports zrecipe must itself be
 distributed under AGPL-compatible terms, and one that offers it as a
@@ -368,7 +396,9 @@ The full design, including the search algorithm, the candidate grids for
 each engine, and the spike results that shaped the limitations above, lives
 at `docs/superpowers/specs/2026-09-03-zrecipe-design.md`, with the GNU
 gzip engine and the AGPL relicensing in
-`docs/superpowers/specs/2026-09-03-gnu-gzip-engine-design.md` and the
-pigz engine in `docs/superpowers/specs/2026-09-03-pigz-engine-design.md`. The
+`docs/superpowers/specs/2026-09-03-gnu-gzip-engine-design.md`, the
+pigz engine in `docs/superpowers/specs/2026-09-03-pigz-engine-design.md`
+and the pgzip engine in
+`docs/superpowers/specs/2026-09-04-pgzip-engine-design.md`. The
 implementation plan that built this library task by task lives at
 `docs/superpowers/plans/2026-09-03-zrecipe.md`.

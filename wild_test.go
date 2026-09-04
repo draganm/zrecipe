@@ -44,13 +44,13 @@ func run(t *testing.T, stdin []byte, outFile string, name string, args ...string
 	return out.Bytes()
 }
 
-func check(t *testing.T, file, data []byte) {
+func check(t *testing.T, file, data []byte) *Params {
 	t.Helper()
 	p, err := Analyze(context.Background(), bytes.NewReader(file), nil)
 	if err != nil {
 		if errors.Is(err, ErrNotReproducible) {
 			t.Errorf("NOT REPRODUCIBLE: %v", err)
-			return
+			return nil
 		}
 		t.Fatalf("Analyze: %v", err)
 	}
@@ -67,6 +67,7 @@ func check(t *testing.T, file, data []byte) {
 	case FormatZstd:
 		t.Logf("reproduced by %s %s %+v", p.Engine, p.EngineVersion, *p.Zstd)
 	}
+	return p
 }
 
 // skipWithoutCgoEngines skips a wild-fixture test when built without cgo.
@@ -136,6 +137,45 @@ func TestWildPigz(t *testing.T) {
 			name := filepath.Join(args...)
 			t.Run(f.Name+"/"+name, func(t *testing.T) {
 				check(t, run(t, f.Data, "", "pigz", append([]string{"-c"}, args...)...), f.Data)
+			})
+		}
+	}
+}
+
+// buildPgzipRef builds engine/pgzip/testdata/pgzipref, the real
+// klauspost/pgzip v1.2.6 over klauspost/compress v1.11.3 (its own module,
+// since this one links a newer klauspost/compress), and returns its path.
+func buildPgzipRef(t *testing.T) string {
+	t.Helper()
+	tool(t, "go")
+	bin := filepath.Join(t.TempDir(), "pgzipref")
+	cmd := exec.Command("go", "build", "-o", bin, ".")
+	cmd.Dir = filepath.Join("engine", "pgzip", "testdata", "pgzipref")
+	cmd.Env = append(os.Environ(), "GOWORK=off")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build pgzipref: %v: %s", err, out)
+	}
+	return bin
+}
+
+// TestWildPgzip needs no cgo: the pure-Go pgzip engine reproduces
+// klauspost/pgzip's files at every level, with and without a custom block
+// size, whatever the thread count.
+func TestWildPgzip(t *testing.T) {
+	bin := buildPgzipRef(t)
+	for _, f := range wildInputs() {
+		for _, args := range [][]string{
+			{"-level", "5"}, {"-level", "1"}, {"-level", "9"}, {"-level", "0"}, {"-level", "-2"},
+			{"-level", "5", "-blocks", "1"},
+			{"-level", "6", "-block", "131072"},
+			{"-level", "3", "-block", "4194304"},
+		} {
+			name := filepath.Join(args...)
+			t.Run(f.Name+"/"+name, func(t *testing.T) {
+				p := check(t, run(t, f.Data, "", bin, args...), f.Data)
+				if p != nil && p.Engine != "pgzip" {
+					t.Fatalf("reproduced by %s, want pgzip", p.Engine)
+				}
 			})
 		}
 	}

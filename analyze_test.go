@@ -11,6 +11,7 @@ import (
 	"github.com/draganm/zrecipe/engine"
 	"github.com/draganm/zrecipe/engine/goflate"
 	"github.com/draganm/zrecipe/engine/kpzstd"
+	"github.com/draganm/zrecipe/engine/pgzip"
 	"github.com/draganm/zrecipe/enginetest"
 	"github.com/draganm/zrecipe/fixtures"
 )
@@ -91,6 +92,7 @@ func TestAnalyzeGzipFindsProducer(t *testing.T) {
 	for _, tc := range []gzipProducerCase{
 		{goflate.New(), engine.DeflateParams{Level: 6}},
 		{goflate.New(), engine.DeflateParams{Level: 1}},
+		{pgzip.New(), engine.DeflateParams{Level: 5}},
 	} {
 		checkGzipFindsProducer(t, data, tc)
 	}
