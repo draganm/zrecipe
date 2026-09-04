@@ -1,4 +1,4 @@
-module github.com/draganm/comp-prysm
+module github.com/draganm/zrecipe
 
 go 1.26.6
 

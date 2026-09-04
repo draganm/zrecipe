@@ -8,18 +8,18 @@ import (
 	"strings"
 	"testing"
 
-	compprysm "github.com/draganm/comp-prysm"
-	"github.com/draganm/comp-prysm/engine"
-	"github.com/draganm/comp-prysm/engine/goflate"
-	"github.com/draganm/comp-prysm/enginetest"
-	"github.com/draganm/comp-prysm/fixtures"
+	"github.com/draganm/zrecipe"
+	"github.com/draganm/zrecipe/engine"
+	"github.com/draganm/zrecipe/engine/goflate"
+	"github.com/draganm/zrecipe/enginetest"
+	"github.com/draganm/zrecipe/fixtures"
 )
 
 // hasCgoEngines reports whether this binary was built with cgo, and so has
 // the zlib and libzstd engines available. The "engines" subcommand's output
 // (and therefore what it can be asserted to contain) depends on it.
 func hasCgoEngines() bool {
-	_, ok := engine.ByName(compprysm.DefaultEngines(), "zlib")
+	_, ok := engine.ByName(zrecipe.DefaultEngines(), "zlib")
 	return ok
 }
 
@@ -29,7 +29,7 @@ func runApp(t *testing.T, args ...string) (string, error) {
 	var out bytes.Buffer
 	app.Writer = &out
 	app.ErrWriter = &out
-	err := app.Run(append([]string{"comp-prysm"}, args...))
+	err := app.Run(append([]string{"zrecipe"}, args...))
 	return out.String(), err
 }
 
@@ -224,7 +224,7 @@ func TestUsageErrorsReturnWithoutExiting(t *testing.T) {
 	}
 }
 
-// TestBuiltBinaryReportsModuleVersions builds the real comp-prysm binary and
+// TestBuiltBinaryReportsModuleVersions builds the real zrecipe binary and
 // checks its engines output. Under go test, the klauspost engines report
 // version "(devel)" because test binaries carry no dependency build info
 // (see engine.ModuleVersion); a real build reports the version recorded in
@@ -233,7 +233,7 @@ func TestBuiltBinaryReportsModuleVersions(t *testing.T) {
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("go not on PATH")
 	}
-	bin := filepath.Join(t.TempDir(), "comp-prysm")
+	bin := filepath.Join(t.TempDir(), "zrecipe")
 	build := exec.Command("go", "build", "-o", bin, ".")
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build: %v: %s", err, out)

@@ -7,8 +7,8 @@ import (
 	"io"
 	"sync"
 
-	"github.com/draganm/comp-prysm/engine"
-	"github.com/draganm/comp-prysm/format"
+	"github.com/draganm/zrecipe/engine"
+	"github.com/draganm/zrecipe/format"
 )
 
 // ErrNoMatch reports that no candidate reproduced the reference.

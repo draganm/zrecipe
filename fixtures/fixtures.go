@@ -78,7 +78,7 @@ func Mixed(n int) []byte {
 func Small() []Fixture {
 	return []Fixture{
 		{"empty", nil},
-		{"tiny", []byte("hello, comp-prysm")},
+		{"tiny", []byte("hello, zrecipe")},
 		{"text-64k", Text(64 << 10)},
 		{"zeros-256k", Zeros(256 << 10)},
 		{"random-16k", Random(16<<10, 3)},

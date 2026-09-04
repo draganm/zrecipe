@@ -1,11 +1,11 @@
-package compprysm
+package zrecipe
 
 import (
-	"github.com/draganm/comp-prysm/engine"
-	"github.com/draganm/comp-prysm/engine/gnugzip"
-	"github.com/draganm/comp-prysm/engine/goflate"
-	"github.com/draganm/comp-prysm/engine/kpflate"
-	"github.com/draganm/comp-prysm/engine/kpzstd"
+	"github.com/draganm/zrecipe/engine"
+	"github.com/draganm/zrecipe/engine/gnugzip"
+	"github.com/draganm/zrecipe/engine/goflate"
+	"github.com/draganm/zrecipe/engine/kpflate"
+	"github.com/draganm/zrecipe/engine/kpzstd"
 )
 
 // DefaultEngines returns every engine compiled into the binary, most likely

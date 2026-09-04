@@ -1,4 +1,4 @@
-package compprysm
+package zrecipe
 
 import (
 	"bytes"
@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/draganm/comp-prysm/fixtures"
+	"github.com/draganm/zrecipe/fixtures"
 )
 
 func tool(t *testing.T, name string) string {

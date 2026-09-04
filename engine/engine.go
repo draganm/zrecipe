@@ -1,4 +1,4 @@
-// Package engine defines the compression engines that comp-prysm searches
+// Package engine defines the compression engines that zrecipe searches
 // over, and the parameter types recorded in Params.
 package engine
 
@@ -6,7 +6,7 @@ import (
 	"io"
 	"runtime/debug"
 
-	"github.com/draganm/comp-prysm/format"
+	"github.com/draganm/zrecipe/format"
 )
 
 // Format is re-exported from package format.

@@ -1,4 +1,4 @@
-package compprysm
+package zrecipe
 
 import (
 	"encoding/base64"
@@ -40,7 +40,7 @@ func (p *Params) Write(w io.Writer) error {
 func ReadParams(r io.Reader) (*Params, error) {
 	var p Params
 	if err := json.NewDecoder(r).Decode(&p); err != nil {
-		return nil, fmt.Errorf("compprysm: decode params: %w", err)
+		return nil, fmt.Errorf("zrecipe: decode params: %w", err)
 	}
 	if p.Version != ParamsVersion {
 		return nil, fmt.Errorf("%w: got %d, want %d", ErrParamsVersion, p.Version, ParamsVersion)

@@ -40,7 +40,7 @@ func (s *Spool) Write(p []byte) (int, error) {
 }
 
 func (s *Spool) spill() error {
-	f, err := os.CreateTemp(s.dir, "comp-prysm-spool-*")
+	f, err := os.CreateTemp(s.dir, "zrecipe-spool-*")
 	if err != nil {
 		return err
 	}

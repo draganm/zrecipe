@@ -1,13 +1,13 @@
-// Package compprysm makes compressed files reproducible from their
+// Package zrecipe makes compressed files reproducible from their
 // uncompressed content: Analyze finds the engine and parameters that
 // re-create a gzip or zstd file exactly, and Recompress rebuilds it.
-package compprysm
+package zrecipe
 
 import (
 	"io"
 
-	"github.com/draganm/comp-prysm/engine"
-	"github.com/draganm/comp-prysm/format"
+	"github.com/draganm/zrecipe/engine"
+	"github.com/draganm/zrecipe/format"
 )
 
 // Format identifies a compression container.

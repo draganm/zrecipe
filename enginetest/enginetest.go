@@ -11,10 +11,10 @@ import (
 	"io"
 	"testing"
 
-	"github.com/draganm/comp-prysm/engine"
-	"github.com/draganm/comp-prysm/fixtures"
-	"github.com/draganm/comp-prysm/format"
-	"github.com/draganm/comp-prysm/search"
+	"github.com/draganm/zrecipe/engine"
+	"github.com/draganm/zrecipe/fixtures"
+	"github.com/draganm/zrecipe/format"
+	"github.com/draganm/zrecipe/search"
 )
 
 // Flatten concatenates tiers in order.

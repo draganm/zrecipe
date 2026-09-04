@@ -1,4 +1,4 @@
-// Command comp-prysm analyzes compressed files and rebuilds them from
+// Command zrecipe analyzes compressed files and rebuilds them from
 // uncompressed content.
 package main
 
@@ -12,7 +12,7 @@ import (
 
 	"github.com/urfave/cli/v2"
 
-	compprysm "github.com/draganm/comp-prysm"
+	"github.com/draganm/zrecipe"
 )
 
 func main() {
@@ -24,7 +24,7 @@ func main() {
 
 func newApp() *cli.App {
 	return &cli.App{
-		Name:  "comp-prysm",
+		Name:  "zrecipe",
 		Usage: "make compressed files reproducible from their content",
 		Commands: []*cli.Command{
 			{
@@ -66,14 +66,14 @@ func newApp() *cli.App {
 
 func detect(c *cli.Context) error {
 	if c.NArg() != 1 {
-		return errors.New("usage: comp-prysm detect <file>")
+		return errors.New("usage: zrecipe detect <file>")
 	}
 	f, err := os.Open(c.Args().Get(0))
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	format, err := compprysm.Detect(f)
+	format, err := zrecipe.Detect(f)
 	if err != nil {
 		return err
 	}
@@ -83,14 +83,14 @@ func detect(c *cli.Context) error {
 
 func analyze(c *cli.Context) error {
 	if c.NArg() != 1 {
-		return errors.New("usage: comp-prysm analyze [--params FILE] [--uncompressed FILE] [--parallelism N] [--temp-dir DIR] <file>")
+		return errors.New("usage: zrecipe analyze [--params FILE] [--uncompressed FILE] [--parallelism N] [--temp-dir DIR] <file>")
 	}
 	f, err := os.Open(c.Args().Get(0))
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	opts := &compprysm.Options{Parallelism: c.Int("parallelism"), TempDir: c.String("temp-dir")}
+	opts := &zrecipe.Options{Parallelism: c.Int("parallelism"), TempDir: c.String("temp-dir")}
 	uncPath := c.String("uncompressed")
 	var uncFile *os.File
 	if uncPath != "" {
@@ -100,7 +100,7 @@ func analyze(c *cli.Context) error {
 		}
 		opts.Uncompressed = uncFile
 	}
-	p, err := compprysm.Analyze(context.Background(), f, opts)
+	p, err := zrecipe.Analyze(context.Background(), f, opts)
 	if uncFile != nil {
 		uncFile.Close()
 		if err != nil {
@@ -132,13 +132,13 @@ func analyze(c *cli.Context) error {
 
 func recompress(c *cli.Context) error {
 	if c.NArg() != 2 {
-		return errors.New("usage: comp-prysm recompress --params FILE [--allow-version-mismatch] <uncompressed> <out>")
+		return errors.New("usage: zrecipe recompress --params FILE [--allow-version-mismatch] <uncompressed> <out>")
 	}
 	pf, err := os.Open(c.String("params"))
 	if err != nil {
 		return err
 	}
-	p, err := compprysm.ReadParams(pf)
+	p, err := zrecipe.ReadParams(pf)
 	pf.Close()
 	if err != nil {
 		return err
@@ -154,8 +154,8 @@ func recompress(c *cli.Context) error {
 		return err
 	}
 	defer os.Remove(tmp.Name())
-	opts := &compprysm.RecompressOptions{AllowVersionMismatch: c.Bool("allow-version-mismatch")}
-	if err := compprysm.Recompress(context.Background(), p, in, tmp, opts); err != nil {
+	opts := &zrecipe.RecompressOptions{AllowVersionMismatch: c.Bool("allow-version-mismatch")}
+	if err := zrecipe.Recompress(context.Background(), p, in, tmp, opts); err != nil {
 		tmp.Close()
 		return err
 	}
@@ -171,7 +171,7 @@ func recompress(c *cli.Context) error {
 func engines(c *cli.Context) error {
 	tw := tabwriter.NewWriter(c.App.Writer, 0, 8, 2, ' ', 0)
 	fmt.Fprintln(tw, "NAME\tFORMAT\tVERSION")
-	for _, e := range compprysm.DefaultEngines() {
+	for _, e := range zrecipe.DefaultEngines() {
 		fmt.Fprintf(tw, "%s\t%s\t%s\n", e.Name(), e.Format(), e.Version())
 	}
 	return tw.Flush()

@@ -1,6 +1,6 @@
 # pigz engine
 
-Addendum to the comp-prysm design of 2026-09-03. The wild-fixture spike found
+Addendum to the zrecipe design of 2026-09-03. The wild-fixture spike found
 that pigz output on real-sized input matches no single-stream zlib candidate
 at any level or worker count. This engine reproduces it.
 

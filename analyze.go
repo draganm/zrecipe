@@ -1,4 +1,4 @@
-package compprysm
+package zrecipe
 
 import (
 	"bufio"
@@ -15,9 +15,9 @@ import (
 
 	"github.com/klauspost/compress/zstd"
 
-	"github.com/draganm/comp-prysm/engine"
-	"github.com/draganm/comp-prysm/format"
-	"github.com/draganm/comp-prysm/search"
+	"github.com/draganm/zrecipe/engine"
+	"github.com/draganm/zrecipe/format"
+	"github.com/draganm/zrecipe/search"
 )
 
 // DefaultMaxInMemory is the spool size above which content goes to a temp file.

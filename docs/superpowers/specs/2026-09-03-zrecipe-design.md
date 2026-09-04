@@ -1,11 +1,11 @@
-# comp-prysm design
+# zrecipe design
 
 Date: 2026-09-03
 Status: approved design, pending implementation plan
 
 ## Purpose
 
-comp-prysm is a Go library that makes compressed files reproducible from their
+zrecipe is a Go library that makes compressed files reproducible from their
 uncompressed content. Given an `io.ReadSeeker` it:
 
 1. Detects whether the input is gzip, zstd, or uncompressed.
@@ -56,7 +56,7 @@ add engines or reuse the search.
 
 | Package | Purpose |
 |---|---|
-| `github.com/draganm/comp-prysm` (package `compprysm`) | Public API: Detect, Analyze, Recompress, Params, errors, DefaultEngines |
+| `github.com/draganm/zrecipe` (package `zrecipe`) | Public API: Detect, Analyze, Recompress, Params, errors, DefaultEngines |
 | `.../format` | Magic-byte detection, gzip header parsing, zstd frame header parsing |
 | `.../engine` | Engine interfaces, parameter types, engine set |
 | `.../engine/zlib` | cgo engine over system zlib, raw deflate |
@@ -65,7 +65,7 @@ add engines or reuse the search.
 | `.../engine/kpflate` | `github.com/klauspost/compress/flate` engine |
 | `.../engine/kpzstd` | `github.com/klauspost/compress/zstd` engine |
 | `.../search` | Spool, compare writer, candidate evaluation |
-| `.../cmd/comp-prysm` | CLI built on `github.com/urfave/cli/v2` |
+| `.../cmd/zrecipe` | CLI built on `github.com/urfave/cli/v2` |
 
 Parameter types live in `engine` because engines consume them and the root
 package imports the engines. The root package re-exports them with type
@@ -79,7 +79,7 @@ engines. There is no `init()` registration.
 ## Public API
 
 ```go
-package compprysm
+package zrecipe
 
 type Format = engine.Format // "none", "gzip", "zstd"
 
@@ -424,23 +424,23 @@ wrapped with detail:
 
 ## CLI
 
-`cmd/comp-prysm`, built with `github.com/urfave/cli/v2`. Exit status 0 on
+`cmd/zrecipe`, built with `github.com/urfave/cli/v2`. Exit status 0 on
 success, 1 on any error, with the error printed to stderr. urfave/cli v2
 stops parsing flags at the first positional argument, so every flag must
 come before the positionals it modifies.
 
 ```
-comp-prysm detect <file>
+zrecipe detect <file>
     Prints gzip, zstd or none.
 
-comp-prysm analyze [--params <out.json>] [--uncompressed <out>] [--parallelism N] [--temp-dir DIR] <file>
+zrecipe analyze [--params <out.json>] [--uncompressed <out>] [--parallelism N] [--temp-dir DIR] <file>
     Runs Analyze. Writes the Params JSON to --params, default stdout.
     Writes the uncompressed content to --uncompressed if given.
 
-comp-prysm recompress --params <p.json> [--allow-version-mismatch] <uncompressed> <out>
+zrecipe recompress --params <p.json> [--allow-version-mismatch] <uncompressed> <out>
     Runs Recompress. Writes to a temp file next to <out> and renames on success.
 
-comp-prysm engines
+zrecipe engines
     Lists engine names, formats and versions in the default set.
 ```
 

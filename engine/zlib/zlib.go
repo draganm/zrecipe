@@ -23,8 +23,8 @@ import (
 	"io"
 	"unsafe"
 
-	"github.com/draganm/comp-prysm/engine"
-	"github.com/draganm/comp-prysm/format"
+	"github.com/draganm/zrecipe/engine"
+	"github.com/draganm/zrecipe/format"
 )
 
 // inBufSize is how much input each deflate call is handed. Input is

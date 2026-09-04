@@ -7,10 +7,10 @@ import (
 
 	"github.com/klauspost/compress/zstd"
 
-	"github.com/draganm/comp-prysm/engine"
-	"github.com/draganm/comp-prysm/enginetest"
-	"github.com/draganm/comp-prysm/fixtures"
-	"github.com/draganm/comp-prysm/format"
+	"github.com/draganm/zrecipe/engine"
+	"github.com/draganm/zrecipe/enginetest"
+	"github.com/draganm/zrecipe/fixtures"
+	"github.com/draganm/zrecipe/format"
 )
 
 func header(t *testing.T, frame []byte) *format.ZstdFrameHeader {

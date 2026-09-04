@@ -1,12 +1,12 @@
 //go:build cgo
 
-package compprysm
+package zrecipe
 
 import (
-	"github.com/draganm/comp-prysm/engine"
-	"github.com/draganm/comp-prysm/engine/libzstd"
-	"github.com/draganm/comp-prysm/engine/pigz"
-	"github.com/draganm/comp-prysm/engine/zlib"
+	"github.com/draganm/zrecipe/engine"
+	"github.com/draganm/zrecipe/engine/libzstd"
+	"github.com/draganm/zrecipe/engine/pigz"
+	"github.com/draganm/zrecipe/engine/zlib"
 )
 
 // cgoEngines returns the engines that link C libraries: zlib before pigz,

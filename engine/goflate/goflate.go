@@ -7,8 +7,8 @@ import (
 	"io"
 	"runtime"
 
-	"github.com/draganm/comp-prysm/engine"
-	"github.com/draganm/comp-prysm/format"
+	"github.com/draganm/zrecipe/engine"
+	"github.com/draganm/zrecipe/format"
 )
 
 // Engine produces raw deflate streams with compress/flate.

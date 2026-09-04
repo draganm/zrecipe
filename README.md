@@ -1,6 +1,6 @@
-# comp-prysm
+# zrecipe
 
-comp-prysm is a Go library that makes compressed files reproducible from
+zrecipe is a Go library that makes compressed files reproducible from
 their uncompressed content: given a gzip or zstd file it decompresses once,
 searches a set of real-world compression engines and parameter grids for the
 combination that recreates the exact same compressed bytes, and records that
@@ -13,14 +13,14 @@ artifact on demand.
 
 ## Install and build
 
-comp-prysm ships as a Nix flake that provides the Go toolchain and the C
+zrecipe ships as a Nix flake that provides the Go toolchain and the C
 libraries the cgo engines link against (system zlib and zstd, plus `gzip`
 and `pigz` for the wild-fixture tests). Enter the shell and build from
 there:
 
 ```sh
 nix develop
-go build ./cmd/comp-prysm
+go build ./cmd/zrecipe
 ```
 
 Everything below assumes commands run inside `nix develop` (or
@@ -31,7 +31,7 @@ without cgo, in which case only the four pure-Go engines, `gnu-gzip`,
 
 ## Library usage
 
-The root package is `github.com/draganm/comp-prysm`. `Analyze` takes an
+The root package is `github.com/draganm/zrecipe`. `Analyze` takes an
 `io.ReadSeeker` over a compressed file, decompresses it once while hashing
 both the compressed and uncompressed bytes, and returns `*Params`, which
 records the engine, its version, and the parameters that reproduce the
@@ -54,7 +54,7 @@ defer uncompressed.Close()
 // parameter set that reproduces archive.tar.gz byte for byte from
 // archive.tar. Store archive.tar and the params JSON; the .gz can now be
 // discarded.
-params, err := compprysm.Analyze(ctx, in, &compprysm.Options{Uncompressed: uncompressed})
+params, err := zrecipe.Analyze(ctx, in, &zrecipe.Options{Uncompressed: uncompressed})
 // ...
 
 paramsFile, err := os.Create("params.json")
@@ -71,7 +71,7 @@ out, err := os.Create("rebuilt.tar.gz")
 // ...
 defer out.Close()
 
-err = compprysm.Recompress(ctx, params, src, out, nil)
+err = zrecipe.Recompress(ctx, params, src, out, nil)
 ```
 
 For an uncompressed input `Analyze` returns `Params` with `Format` set to
@@ -92,26 +92,26 @@ section that does not match `format` — with `ErrInvalidParams`.
 
 ## CLI usage
 
-`cmd/comp-prysm` wraps the library in four subcommands:
+`cmd/zrecipe` wraps the library in four subcommands:
 
 ```sh
 # Print gzip, zstd or none for a file.
-comp-prysm detect archive.tar.gz
+zrecipe detect archive.tar.gz
 
 # Find parameters that reproduce a compressed file. Params JSON goes to
 # stdout by default, or to --params; --uncompressed additionally writes the
 # decompressed content. Flags must come before the positional <file>: this
 # is a urfave/cli v2 limitation (it stops parsing flags at the first
 # positional argument), not a choice made by this tool.
-comp-prysm analyze --params params.json --uncompressed archive.tar archive.tar.gz
+zrecipe analyze --params params.json --uncompressed archive.tar archive.tar.gz
 
 # Rebuild the compressed file from params and the uncompressed content.
 # Writes to a temp file next to <out> and renames on success, so a failed
 # run never leaves a partial file at the destination. Same flags-first rule.
-comp-prysm recompress --params params.json archive.tar rebuilt.tar.gz
+zrecipe recompress --params params.json archive.tar rebuilt.tar.gz
 
 # List the engines compiled into this binary, with their format and version.
-comp-prysm engines
+zrecipe engines
 ```
 
 Exit status is 0 on success and 1 on any error, with the error printed to
@@ -198,7 +198,7 @@ verified under exactly the write shape later used to rebuild the file.
 `Params` is versioned (currently 1), carries blake3 digests and sizes of
 both the compressed and uncompressed content, the winning engine's name and
 version, and either a `gzip` or a `zstd` section with that engine's
-parameters. Here is what `comp-prysm analyze` prints for a small file gzipped
+parameters. Here is what `zrecipe analyze` prints for a small file gzipped
 by the system's `gzip -6`, reproduced by the `zlib` engine:
 
 ```json
@@ -267,7 +267,7 @@ section:
 zero-valued or false; they, along with the always-present `workers`, cover
 long-distance matching mode, an explicit window size, and klauspost's
 one-shot `EncodeAll` encoding path. `end_with_data` is an addition beyond
-the original design. It does not record what the producer did — comp-prysm
+the original design. It does not record what the producer did — zrecipe
 has no way to observe that — but what the frame itself shows: whether the
 last block is non-empty (`true`) or an explicit empty block trails the data
 (`false`). A known-size producer such as the zstd CLI reading a file
@@ -342,12 +342,12 @@ behind an environment variable because it takes minutes and several
 gigabytes of scratch disk:
 
 ```sh
-COMP_PRYSM_LARGE=1 go test . -run LargeInput -v -timeout 30m
+ZRECIPE_LARGE=1 go test . -run LargeInput -v -timeout 30m
 ```
 
 ## License
 
-comp-prysm is licensed under the GNU Affero General Public License,
+zrecipe is licensed under the GNU Affero General Public License,
 version 3 or later; see `LICENSE`. The `engine/gnugzip` package contains
 code ported from GNU gzip, which is licensed under the GNU General Public
 License, version 3 or later; those files keep their upstream copyright
@@ -358,7 +358,7 @@ network-interaction terms apply to the AGPL-covered parts. Every other
 dependency is under a permissive license (BSD-3-Clause, MIT or the zlib
 license) that is compatible with both.
 
-In practice this means a program that imports comp-prysm must itself be
+In practice this means a program that imports zrecipe must itself be
 distributed under AGPL-compatible terms, and one that offers it as a
 network service must offer its source to the users of that service.
 
@@ -366,9 +366,9 @@ network service must offer its source to the users of that service.
 
 The full design, including the search algorithm, the candidate grids for
 each engine, and the spike results that shaped the limitations above, lives
-at `docs/superpowers/specs/2026-09-03-comp-prysm-design.md`, with the GNU
+at `docs/superpowers/specs/2026-09-03-zrecipe-design.md`, with the GNU
 gzip engine and the AGPL relicensing in
 `docs/superpowers/specs/2026-09-03-gnu-gzip-engine-design.md` and the
 pigz engine in `docs/superpowers/specs/2026-09-03-pigz-engine-design.md`. The
 implementation plan that built this library task by task lives at
-`docs/superpowers/plans/2026-09-03-comp-prysm.md`.
+`docs/superpowers/plans/2026-09-03-zrecipe.md`.

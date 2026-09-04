@@ -1,14 +1,14 @@
 //go:build cgo
 
-package compprysm
+package zrecipe
 
 import (
 	"testing"
 
-	"github.com/draganm/comp-prysm/engine"
-	"github.com/draganm/comp-prysm/engine/libzstd"
-	"github.com/draganm/comp-prysm/engine/zlib"
-	"github.com/draganm/comp-prysm/fixtures"
+	"github.com/draganm/zrecipe/engine"
+	"github.com/draganm/zrecipe/engine/libzstd"
+	"github.com/draganm/zrecipe/engine/zlib"
+	"github.com/draganm/zrecipe/fixtures"
 )
 
 // TestAnalyzeGzipFindsProducerCgo is the cgo half of TestAnalyzeGzipFindsProducer

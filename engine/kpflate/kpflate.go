@@ -7,8 +7,8 @@ import (
 
 	"github.com/klauspost/compress/flate"
 
-	"github.com/draganm/comp-prysm/engine"
-	"github.com/draganm/comp-prysm/format"
+	"github.com/draganm/zrecipe/engine"
+	"github.com/draganm/zrecipe/format"
 )
 
 const modulePath = "github.com/klauspost/compress"

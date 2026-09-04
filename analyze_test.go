@@ -1,4 +1,4 @@
-package compprysm
+package zrecipe
 
 import (
 	"bytes"
@@ -8,11 +8,11 @@ import (
 	"io"
 	"testing"
 
-	"github.com/draganm/comp-prysm/engine"
-	"github.com/draganm/comp-prysm/engine/goflate"
-	"github.com/draganm/comp-prysm/engine/kpzstd"
-	"github.com/draganm/comp-prysm/enginetest"
-	"github.com/draganm/comp-prysm/fixtures"
+	"github.com/draganm/zrecipe/engine"
+	"github.com/draganm/zrecipe/engine/goflate"
+	"github.com/draganm/zrecipe/engine/kpzstd"
+	"github.com/draganm/zrecipe/enginetest"
+	"github.com/draganm/zrecipe/fixtures"
 )
 
 // seekOnly hides io.ReaderAt so the sequential search path is exercised.

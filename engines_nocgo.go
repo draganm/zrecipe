@@ -1,7 +1,7 @@
 //go:build !cgo
 
-package compprysm
+package zrecipe
 
-import "github.com/draganm/comp-prysm/engine"
+import "github.com/draganm/zrecipe/engine"
 
 func cgoEngines() []engine.Engine { return nil }

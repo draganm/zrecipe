@@ -1,4 +1,4 @@
-package compprysm
+package zrecipe
 
 import (
 	"context"
@@ -8,7 +8,7 @@ import (
 	"hash/crc32"
 	"io"
 
-	"github.com/draganm/comp-prysm/engine"
+	"github.com/draganm/zrecipe/engine"
 )
 
 // RecompressOptions configures Recompress. The zero value uses the defaults.

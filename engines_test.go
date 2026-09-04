@@ -1,4 +1,4 @@
-package compprysm
+package zrecipe
 
 import "testing"
 

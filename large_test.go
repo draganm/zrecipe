@@ -1,4 +1,4 @@
-package compprysm
+package zrecipe
 
 import (
 	"compress/gzip"
@@ -9,14 +9,14 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/draganm/comp-prysm/fixtures"
+	"github.com/draganm/zrecipe/fixtures"
 )
 
 // TestLargeInput streams a 2 GiB gzip through Analyze and Recompress. It
-// runs only with COMP_PRYSM_LARGE=1 because it takes minutes and disk.
+// runs only with ZRECIPE_LARGE=1 because it takes minutes and disk.
 func TestLargeInput(t *testing.T) {
-	if os.Getenv("COMP_PRYSM_LARGE") == "" {
-		t.Skip("set COMP_PRYSM_LARGE=1 to run")
+	if os.Getenv("ZRECIPE_LARGE") == "" {
+		t.Skip("set ZRECIPE_LARGE=1 to run")
 	}
 	const size = 2 << 30
 	dir := t.TempDir()

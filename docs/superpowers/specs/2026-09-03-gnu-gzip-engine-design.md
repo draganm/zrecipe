@@ -1,6 +1,6 @@
 # GNU gzip engine and AGPL relicensing
 
-Addendum to the comp-prysm design of 2026-09-03. That spec left GNU gzip as an
+Addendum to the zrecipe design of 2026-09-03. That spec left GNU gzip as an
 open question: its deflate implementation is GPL C code, so an engine that
 reproduces it byte for byte is a licensing decision for the project owner.
 The wild-fixture spike (plan Task 15) then showed that zlib reproduces GNU

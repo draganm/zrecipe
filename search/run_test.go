@@ -10,8 +10,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/draganm/comp-prysm/engine"
-	"github.com/draganm/comp-prysm/format"
+	"github.com/draganm/zrecipe/engine"
+	"github.com/draganm/zrecipe/format"
 )
 
 // fakeDeflate "compresses" by prefixing the content with its level byte.
