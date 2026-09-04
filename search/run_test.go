@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -104,6 +105,47 @@ func candidates(e engine.Engine, levels ...int) []Candidate {
 		out = append(out, Candidate{Engine: e, Deflate: &p})
 	}
 	return out
+}
+
+// TestEvaluateFeedsFixedSizeWrites proves the search hands content to the
+// engine in engine.FeedSize writes, the shape Recompress uses, even though
+// an in-memory spool's reader has a WriterTo fast path that would otherwise
+// deliver everything in one Write (issue #1).
+func TestEvaluateFeedsFixedSizeWrites(t *testing.T) {
+	content := bytes.Repeat([]byte("y"), 2*engine.FeedSize+100)
+	e := &sizeRecordingDeflate{}
+	in := input(t, content, 3, false)
+	if !in.Spool.InMemory() {
+		t.Fatal("spool spilled; the test wants the in-memory WriterTo path")
+	}
+	if _, err := Run(context.Background(), in, candidates(e, 3), 1); err != nil {
+		t.Fatal(err)
+	}
+	want := []int{engine.FeedSize, engine.FeedSize, 100}
+	if !reflect.DeepEqual(e.sizes, want) {
+		t.Fatalf("write sizes %v, want %v", e.sizes, want)
+	}
+}
+
+// sizeRecordingDeflate is fakeDeflate that also records the sizes of the
+// writes its writer receives.
+type sizeRecordingDeflate struct {
+	fakeDeflate
+	sizes []int
+}
+
+func (s *sizeRecordingDeflate) NewWriter(w io.Writer, p engine.DeflateParams) (io.WriteCloser, error) {
+	return &sizeRecordingWriter{WriteCloser: &prefixWriter{w: w, level: p.Level}, sizes: &s.sizes}, nil
+}
+
+type sizeRecordingWriter struct {
+	io.WriteCloser
+	sizes *[]int
+}
+
+func (s *sizeRecordingWriter) Write(b []byte) (int, error) {
+	*s.sizes = append(*s.sizes, len(b))
+	return s.WriteCloser.Write(b)
 }
 
 func TestRunFindsMatchSequentially(t *testing.T) {

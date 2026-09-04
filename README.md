@@ -179,6 +179,20 @@ level, and libzstd's output changes between releases while zlib's has been
 stable for years, so a binary reproduces zstd files only against the
 libzstd version it is linked against — see Limitations below.
 
+**Write-size independence.** An engine's output must depend only on the
+content and the parameters, never on how the content was split across
+`Write` calls: `Analyze` verifies a candidate from its spool while
+`Recompress` rebuilds from whatever reader the caller passes. Most engines
+have this property by construction. `zlib` at level 0 does not — zlib sizes
+each stored block by the input one `deflate()` call can see, so 32 KiB
+writes gave 32768-byte blocks where one large write gave maximal 65535-byte
+ones — and neither does `libzstd` with `end_with_data`, which hands whatever
+it holds back to `ZSTD_e_end`. Both engines therefore batch their input
+internally (64 KiB for zlib, libzstd's own stream input size for libzstd),
+and on top of that the search and `Recompress` both feed every engine
+through `engine.Feed`, in fixed 32 KiB writes, so a candidate is always
+verified under exactly the write shape later used to rebuild the file.
+
 ## Params JSON
 
 `Params` is versioned (currently 1), carries blake3 digests and sizes of

@@ -2,6 +2,7 @@ package compprysm
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"errors"
 	"io"
@@ -47,6 +48,48 @@ func TestRecompressRoundTrip(t *testing.T) {
 		}
 		for name, file := range files {
 			checkRoundTrip(t, f.Name, name, file, f.Data)
+		}
+	}
+}
+
+// oneKiBReader hands out at most 1 KiB per Read.
+type oneKiBReader struct{ r io.Reader }
+
+func (o oneKiBReader) Read(p []byte) (int, error) {
+	if len(p) > 1024 {
+		p = p[:1024]
+	}
+	return o.r.Read(p)
+}
+
+// TestRecompressIndependentOfReadSize is the regression test for issue #1:
+// Analyze verified its winning candidate under one large Write (the
+// in-memory spool's WriterTo fast path) while Recompress fed the engine in
+// io.Copy's 32 KiB chunks, and zlib at level 0 sizes its stored blocks by
+// what each Write hands it. A compress/gzip BestSpeed member over ~100 KiB
+// of incompressible data (stored blocks) hit exactly that gap. Whatever
+// Analyze picks must rebuild the file from readers of any granularity.
+func TestRecompressIndependentOfReadSize(t *testing.T) {
+	data := fixtures.Random(100<<10, 11)
+	var file bytes.Buffer
+	gw, err := gzip.NewWriterLevel(&file, gzip.BestSpeed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gw.Write(data); err != nil {
+		t.Fatal(err)
+	}
+	if err := gw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	p := analyze(t, file.Bytes(), nil)
+	for name, r := range map[string]io.Reader{"bytes.Reader": bytes.NewReader(data), "1KiB-reads": oneKiBReader{bytes.NewReader(data)}} {
+		var out bytes.Buffer
+		if err := Recompress(context.Background(), p, r, &out, nil); err != nil {
+			t.Fatalf("%s (%s level %d): %v", name, p.Engine, p.Gzip.Level, err)
+		}
+		if !bytes.Equal(out.Bytes(), file.Bytes()) {
+			t.Fatalf("%s (%s level %d): recompressed bytes differ", name, p.Engine, p.Gzip.Level)
 		}
 	}
 }

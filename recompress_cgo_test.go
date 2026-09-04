@@ -19,6 +19,7 @@ import (
 func TestRecompressRoundTripCgo(t *testing.T) {
 	for _, f := range fixtures.All() {
 		files := map[string][]byte{
+			"zlib-0":       enginetest.Gzip(t, zlib.New(), engine.DeflateParams{Level: 0, Strategy: "default", WindowBits: 15, MemLevel: 8}, f.Data),
 			"zlib-6":       enginetest.Gzip(t, zlib.New(), engine.DeflateParams{Level: 6, Strategy: "default", WindowBits: 15, MemLevel: 8}, f.Data),
 			"libzstd-3":    enginetest.Zstd(t, libzstd.New(), engine.ZstdParams{Level: 3, Checksum: true, ContentSize: true, PledgedSize: true}, f.Data),
 			"libzstd-7-mt": enginetest.Zstd(t, libzstd.New(), engine.ZstdParams{Level: 7, Workers: 1}, f.Data),

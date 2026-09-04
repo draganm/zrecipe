@@ -189,6 +189,60 @@ func TestPropagatesWriteError(t *testing.T) {
 	}
 }
 
+// compressIn compresses data with p, handing it to the writer in writes of
+// at most chunk bytes (the whole of data in one Write when chunk is 0).
+func compressIn(t *testing.T, p engine.ZstdParams, data []byte, chunk int) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	w, err := New().NewWriter(&buf, p, int64(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for len(data) > 0 {
+		n := len(data)
+		if chunk > 0 && n > chunk {
+			n = chunk
+		}
+		if _, err := w.Write(data[:n]); err != nil {
+			t.Fatal(err)
+		}
+		data = data[n:]
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// TestOutputIndependentOfWriteSize proves the frame depends only on the
+// content and parameters, never on how the content was split across
+// Writes. Without input batching, end_with_data with no pledged size
+// handed whatever the last Write held to ZSTD_e_end; for content that
+// arrived in one Write that was also the first call, which makes libzstd
+// pledge the size itself and tune its parameters to it (issue #1).
+func TestOutputIndependentOfWriteSize(t *testing.T) {
+	small := fixtures.Text(64 << 10) // fits one input batch
+	big := fixtures.Mixed(300 << 10) // spans several
+	for _, p := range []engine.ZstdParams{
+		{Level: 3, EndWithData: true},
+		{Level: 1, EndWithData: true},
+		{Level: 19, EndWithData: true},
+		{Level: -3, EndWithData: true},
+		{Level: 3, EndWithData: false},
+		{Level: 3, Checksum: true, ContentSize: true, PledgedSize: true, EndWithData: true},
+		{Level: 3, Workers: 1},
+	} {
+		for name, data := range map[string][]byte{"text-64k": small, "mixed-300k": big} {
+			ref := compressIn(t, p, data, 0)
+			for _, chunk := range []int{1 << 10, 32 << 10, 100000} {
+				if got := compressIn(t, p, data, chunk); !bytes.Equal(got, ref) {
+					t.Errorf("%s %+v: %d-byte writes give %d bytes, one Write gives %d", name, p, chunk, len(got), len(ref))
+				}
+			}
+		}
+	}
+}
+
 func TestRoundTrip(t *testing.T) {
 	var params []engine.ZstdParams
 	for _, l := range []int{1, 3, 9, 19, -3} {

@@ -6,7 +6,6 @@ package libzstd
 /*
 #cgo pkg-config: libzstd
 #include <stdlib.h>
-#include <string.h>
 #include <zstd.h>
 */
 import "C"
@@ -82,19 +81,28 @@ type writer struct {
 	w      io.Writer
 	cctx   *C.ZSTD_CCtx
 	in     unsafe.Pointer
+	inBuf  []byte // the C input buffer as a Go slice
 	inCap  int
 	out    unsafe.Pointer
 	outCap int
 	err    error
 	closed bool
 
-	// endWithData holds back the most recently written chunk (already
-	// copied into in, byte count in pending) instead of compressing it
-	// with ZSTD_e_continue, so it can be handed to libzstd together with
-	// ZSTD_e_end. This reproduces known-size producers such as the zstd
-	// CLI reading a file, which never signals end with empty input.
+	// Input is batched in in (pending bytes so far) and handed to libzstd
+	// in ZSTD_CStreamInSize batches, the read size of the zstd CLI. A
+	// batch is compressed with ZSTD_e_continue only once more input
+	// arrives after it, so the last one is still pending at Close. The
+	// stream therefore depends only on the content, never on how the
+	// caller split it across Writes: what is handed to libzstd together
+	// with ZSTD_e_end, and whether the first call is that one (which makes
+	// libzstd pledge the size itself and tune its parameters to it), would
+	// otherwise follow the size of the last Write (issue #1).
+	pending int
+	// endWithData hands the last batch to libzstd together with
+	// ZSTD_e_end instead of compressing it with ZSTD_e_continue first.
+	// This reproduces known-size producers such as the zstd CLI reading a
+	// file, which never signals end with empty input.
 	endWithData bool
-	pending     int
 }
 
 func setParam(cctx *C.ZSTD_CCtx, param C.ZSTD_cParameter, v int) error {
@@ -157,6 +165,7 @@ func (*Engine) NewWriter(w io.Writer, p engine.ZstdParams, uncompressedSize int6
 		endWithData: p.EndWithData && p.Workers == 0,
 	}
 	z.in = C.malloc(C.size_t(z.inCap))
+	z.inBuf = unsafe.Slice((*byte)(z.in), z.inCap)
 	z.out = C.malloc(C.size_t(z.outCap))
 	return z, nil
 }
@@ -188,6 +197,7 @@ func (z *writer) compressPending(n int) error {
 	return nil
 }
 
+// Write buffers p and compresses each full batch once input follows it.
 func (z *writer) Write(p []byte) (int, error) {
 	if z.err != nil {
 		return 0, z.err
@@ -197,22 +207,14 @@ func (z *writer) Write(p []byte) (int, error) {
 	}
 	total := 0
 	for len(p) > 0 {
-		n := len(p)
-		if n > z.inCap {
-			n = z.inCap
-		}
-		if z.endWithData && z.pending > 0 {
+		if z.pending == z.inCap {
 			if err := z.compressPending(z.pending); err != nil {
 				return total, err
 			}
 			z.pending = 0
 		}
-		C.memcpy(z.in, unsafe.Pointer(&p[0]), C.size_t(n))
-		if z.endWithData {
-			z.pending = n
-		} else if err := z.compressPending(n); err != nil {
-			return total, err
-		}
+		n := copy(z.inBuf[z.pending:], p)
+		z.pending += n
 		p = p[n:]
 		total += n
 	}
@@ -229,9 +231,14 @@ func (z *writer) Close() error {
 		return z.err
 	}
 	size := 0
-	if z.endWithData && z.pending > 0 {
+	if z.endWithData {
 		size = z.pending
+	} else if z.pending > 0 {
+		if err := z.compressPending(z.pending); err != nil {
+			return err
+		}
 	}
+	z.pending = 0
 	in := C.ZSTD_inBuffer{src: z.in, size: C.size_t(size), pos: 0}
 	var rc C.size_t = 1 // force the first iteration
 	for in.pos < in.size || rc != 0 {

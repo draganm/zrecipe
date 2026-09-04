@@ -108,7 +108,7 @@ func recompressGzip(p *Params, in *countingReader, out io.Writer, o *RecompressO
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(dw, io.TeeReader(in, crc)); err != nil {
+	if _, err := engine.Feed(dw, io.TeeReader(in, crc)); err != nil {
 		dw.Close()
 		return err
 	}
@@ -135,7 +135,7 @@ func recompressZstd(p *Params, in io.Reader, out io.Writer, o *RecompressOptions
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(zw, in); err != nil {
+	if _, err := engine.Feed(zw, in); err != nil {
 		zw.Close()
 		return err
 	}

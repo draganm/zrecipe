@@ -27,12 +27,23 @@ import (
 	"github.com/draganm/comp-prysm/format"
 )
 
-// bufSize must exceed 65535 (deflate's max stored-block length) plus the
-// 5-byte stored-block header by enough margin that a level-0 write is never
+// inBufSize is how much input each deflate call is handed. Input is
+// batched so the stream depends only on the content, never on how the
+// caller split it across Writes: at level 0 zlib sizes each stored block
+// from the input it can see in one call (at most 65535 bytes, at least
+// 32768 before it emits anything), so passing Writes straight through
+// turns 32 KiB writes into 32768-byte blocks where one large Write gives
+// maximal ones (issue #1). Batching 64 KiB per call keeps every full block
+// at the canonical 65535 bytes. Levels 1..9 are write-size independent on
+// their own but go through the same batching.
+const inBufSize = 64 << 10
+
+// outBufSize must exceed 65535 (deflate's max stored-block length) plus the
+// 5-byte stored-block header by enough margin that a level-0 call is never
 // output-buffer-limited to a shorter block: with avail_out at exactly
 // 64 KiB, zlib caps each stored block at avail_out-5 (65531) instead of the
 // canonical 65535.
-const bufSize = 128 << 10
+const outBufSize = 128 << 10
 
 var strategies = map[string]C.int{
 	engine.StrategyDefault:     C.Z_DEFAULT_STRATEGY,
@@ -90,6 +101,8 @@ type writer struct {
 	w      io.Writer
 	strm   *C.z_stream
 	in     unsafe.Pointer
+	inBuf  []byte // the C input buffer as a Go slice
+	inLen  int    // bytes buffered in inBuf and not yet handed to deflate
 	out    unsafe.Pointer
 	err    error
 	closed bool
@@ -132,19 +145,20 @@ func (*Engine) NewWriter(w io.Writer, p engine.DeflateParams) (io.WriteCloser, e
 		C.free(unsafe.Pointer(strm))
 		return nil, fmt.Errorf("zlib: deflateInit2 returned %d", rc)
 	}
-	z := &writer{w: w, strm: strm, in: C.malloc(bufSize), out: C.malloc(bufSize)}
+	z := &writer{w: w, strm: strm, in: C.malloc(inBufSize), out: C.malloc(outBufSize)}
+	z.inBuf = unsafe.Slice((*byte)(z.in), inBufSize)
 	z.resetOut()
 	return z, nil
 }
 
 func (z *writer) resetOut() {
 	z.strm.next_out = (*C.Bytef)(z.out)
-	z.strm.avail_out = bufSize
+	z.strm.avail_out = outBufSize
 }
 
 // flushOut writes whatever deflate produced and resets the output buffer.
 func (z *writer) flushOut() error {
-	produced := bufSize - int(z.strm.avail_out)
+	produced := outBufSize - int(z.strm.avail_out)
 	if produced > 0 {
 		if _, err := z.w.Write(unsafe.Slice((*byte)(z.out), produced)); err != nil {
 			return err
@@ -154,6 +168,7 @@ func (z *writer) flushOut() error {
 	return nil
 }
 
+// Write buffers p and hands the buffer to deflate each time it fills.
 func (z *writer) Write(p []byte) (int, error) {
 	if z.err != nil {
 		return 0, z.err
@@ -163,28 +178,37 @@ func (z *writer) Write(p []byte) (int, error) {
 	}
 	total := 0
 	for len(p) > 0 {
-		n := len(p)
-		if n > bufSize {
-			n = bufSize
-		}
-		C.memcpy(z.in, unsafe.Pointer(&p[0]), C.size_t(n))
-		z.strm.next_in = (*C.Bytef)(z.in)
-		z.strm.avail_in = C.uInt(n)
-		for z.strm.avail_in > 0 {
-			rc := C.deflate(z.strm, C.Z_NO_FLUSH)
-			if rc != C.Z_OK && rc != C.Z_BUF_ERROR {
-				z.err = fmt.Errorf("zlib: deflate returned %d", rc)
-				return total, z.err
-			}
-			if err := z.flushOut(); err != nil {
-				z.err = err
+		n := copy(z.inBuf[z.inLen:], p)
+		z.inLen += n
+		p = p[n:]
+		total += n
+		if z.inLen == inBufSize {
+			if err := z.drain(); err != nil {
 				return total, err
 			}
 		}
-		p = p[n:]
-		total += n
 	}
 	return total, nil
+}
+
+// drain hands the buffered input to deflate with Z_NO_FLUSH, writing out
+// whatever it produces, and empties the buffer.
+func (z *writer) drain() error {
+	z.strm.next_in = (*C.Bytef)(z.in)
+	z.strm.avail_in = C.uInt(z.inLen)
+	z.inLen = 0
+	for z.strm.avail_in > 0 {
+		rc := C.deflate(z.strm, C.Z_NO_FLUSH)
+		if rc != C.Z_OK && rc != C.Z_BUF_ERROR {
+			z.err = fmt.Errorf("zlib: deflate returned %d", rc)
+			return z.err
+		}
+		if err := z.flushOut(); err != nil {
+			z.err = err
+			return err
+		}
+	}
+	return nil
 }
 
 func (z *writer) Close() error {
@@ -196,7 +220,14 @@ func (z *writer) Close() error {
 	if z.err != nil {
 		return z.err
 	}
-	z.strm.avail_in = 0
+	// The remainder goes through Z_NO_FLUSH like every full batch, so the
+	// stream is the same one a single Write of the whole content produces;
+	// Z_FINISH then only flushes.
+	if z.inLen > 0 {
+		if err := z.drain(); err != nil {
+			return err
+		}
+	}
 	for {
 		rc := C.deflate(z.strm, C.Z_FINISH)
 		if err := z.flushOut(); err != nil {

@@ -151,7 +151,10 @@ func evaluate(ctx context.Context, in *Input, c Candidate) error {
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(w, in.Spool.Reader()); err != nil {
+	// Feed, not io.Copy: an in-memory spool's reader has a WriterTo fast
+	// path that would hand the engine everything in one Write, a shape
+	// Recompress never uses.
+	if _, err := engine.Feed(w, in.Spool.Reader()); err != nil {
 		w.Close()
 		return err
 	}
