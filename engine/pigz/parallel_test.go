@@ -4,7 +4,9 @@ package pigz
 
 import (
 	"bytes"
+	"errors"
 	"runtime"
+	"syscall"
 	"testing"
 	"time"
 
@@ -89,6 +91,9 @@ func TestWorkersCompressBlocksConcurrently(t *testing.T) {
 	if testing.Short() {
 		t.Skip("timing test")
 	}
+	if raceEnabled {
+		t.Skip("timing is not comparable under the race detector")
+	}
 	if runtime.NumCPU() < 4 {
 		t.Skip("needs at least four CPUs")
 	}
@@ -116,5 +121,61 @@ func BenchmarkWorkers(b *testing.B) {
 				compressWith(b, e, engine.DeflateParams{Level: 6}, data)
 			}
 		})
+	}
+}
+
+// failFirstWrite rejects every write, like a search candidate whose first
+// block already differs from the reference.
+type failFirstWrite struct{}
+
+func (failFirstWrite) Write([]byte) (int, error) { return 0, errors.New("mismatch") }
+
+// cpuTime is the process's user plus system CPU time, cgo threads included.
+func cpuTime(t *testing.T) time.Duration {
+	t.Helper()
+	var ru syscall.Rusage
+	if err := syscall.Getrusage(syscall.RUSAGE_SELF, &ru); err != nil {
+		t.Fatal(err)
+	}
+	return time.Duration(ru.Utime.Nano() + ru.Stime.Nano())
+}
+
+// TestMismatchCostsOneJob checks that a destination rejecting the first
+// write, which is what the candidate search does to a candidate whose
+// first block differs, costs about one job of CPU time rather than one per
+// worker: nothing past the first job is compressed until that job's output
+// has been accepted. The search tries hundreds of candidates per input, so
+// a mismatch has to stay as cheap as it was with one stream.
+func TestMismatchCostsOneJob(t *testing.T) {
+	if testing.Short() {
+		t.Skip("timing test")
+	}
+	if raceEnabled {
+		t.Skip("CPU time is not comparable under the race detector")
+	}
+	data := fixtures.Random(48<<20, 8)
+	p := engine.DeflateParams{Level: 6, BlockSize: 4096} // 12 jobs of 4 MiB
+	e := &Engine{Workers: 8}
+
+	before := cpuTime(t)
+	compressWith(t, e, p, data)
+	full := cpuTime(t) - before
+
+	before = cpuTime(t)
+	w, err := e.NewWriter(failFirstWrite{}, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, werr := w.Write(data)
+	cerr := w.Close()
+	failed := cpuTime(t) - before
+	if werr == nil && cerr == nil {
+		t.Fatal("expected the destination's error")
+	}
+	// The full run compresses twelve jobs; the failing one may compress
+	// the first, and with eight workers busy from the start it would
+	// compress eight.
+	if failed > full/4 {
+		t.Fatalf("a mismatch on the first block cost %v of CPU, the whole input costs %v", failed, full)
 	}
 }

@@ -400,49 +400,48 @@ var errStopped = errors.New("pigz: stopped")
 // goroutines, each on its own zlib stream, and their output is written in
 // job order. A job is compressed from nothing but its own input and
 // dictionary, so the output does not depend on how jobs are scheduled.
+//
+// The first job runs alone, and the other workers are created only once
+// its output has been accepted: the candidate search feeds hundreds of
+// parameter sets through here and rejects most of them at their first
+// block, and a rejected candidate must cost one job, not one per worker.
 func (c *compressor) parallel(r io.Reader, workers int) error {
 	if workers < 1 {
 		workers = 1
 	}
-	streams := []*compressor{c}
-	for len(streams) < workers {
-		s, err := newCompressor(nil, c.level, c.strategy, c.block, c.setdict, c.rsync)
-		if err != nil {
-			for _, s := range streams[1:] {
-				s.free()
-			}
-			return err
-		}
-		streams = append(streams, s)
-	}
-	defer func() {
-		for _, s := range streams[1:] {
-			s.free()
-		}
-	}()
-
 	out := c.w // c itself is worker 0 and writes into job buffers from here
-	jobs := make(chan *job, workers)
+	// jobs is unbuffered so that only the jobs being compressed are in
+	// flight: once the output fails, what is left to finish is one job per
+	// worker rather than a queue of them.
+	jobs := make(chan *job)
 	order := make(chan *job, 2*workers)
 	stop := make(chan struct{})
 	var stopOnce sync.Once
 	fail := func() { stopOnce.Do(func() { close(stop) }) }
+	accepted := make(chan struct{}) // closed once the first job's output is written
 
 	var wg sync.WaitGroup
-	for _, s := range streams {
+	start := func(s *compressor) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for j := range jobs {
-				s.w = &j.out
-				j.err = s.compressJob(j.curr, j.lens, j.hasLens, j.dict, j.more)
+				select {
+				case <-stop:
+					// The output has failed; nothing more is written.
+				default:
+					s.w = &j.out
+					j.err = s.compressJob(j.curr, j.lens, j.hasLens, j.dict, j.more)
+				}
 				close(j.done)
 			}
 		}()
 	}
+	start(c)
 	written := make(chan error, 1)
 	go func() {
 		var err error
+		first := true
 		for j := range order {
 			<-j.done
 			if err != nil {
@@ -453,14 +452,42 @@ func (c *compressor) parallel(r io.Reader, workers int) error {
 			}
 			if err != nil {
 				fail()
+				continue
+			}
+			if first {
+				first = false
+				close(accepted)
 			}
 		}
 		written <- err
 	}()
 
+	var extra []*compressor
+	defer func() {
+		for _, s := range extra {
+			s.free()
+		}
+	}()
+	cut := 0
 	// A job is handed to the workers before it is queued for output, so
 	// every job the writer waits for is one a worker will finish.
 	err := c.cutJobs(r, func(j *job) error {
+		if cut == 1 {
+			select {
+			case <-accepted:
+			case <-stop:
+				return errStopped
+			}
+			for len(extra) < workers-1 {
+				s, err := newCompressor(nil, c.level, c.strategy, c.block, c.setdict, c.rsync)
+				if err != nil {
+					return err
+				}
+				extra = append(extra, s)
+				start(s)
+			}
+		}
+		cut++
 		j.done = make(chan struct{})
 		select {
 		case jobs <- j:
