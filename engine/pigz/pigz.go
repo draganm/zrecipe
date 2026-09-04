@@ -34,9 +34,12 @@ static int cp_pending_bits(z_streamp s) {
 import "C"
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
+	"runtime"
+	"sync"
 	"unsafe"
 
 	"github.com/draganm/zrecipe/engine"
@@ -67,7 +70,20 @@ var strategies = map[string]C.int{
 var otherBlocks = []int{32, 64, 256, 512, 1024, 2048, 4096}
 
 // Engine produces raw deflate streams the way pigz does.
-type Engine struct{}
+type Engine struct {
+	// Workers is how many blocks the parallel path compresses at once, each
+	// on its own zlib stream, as pigz -p does; 0 means GOMAXPROCS. The
+	// output does not depend on it.
+	Workers int
+}
+
+// workers is the parallel path's worker count.
+func (e *Engine) workers() int {
+	if e.Workers > 0 {
+		return e.Workers
+	}
+	return runtime.GOMAXPROCS(0)
+}
 
 // New returns the engine.
 func New() *Engine { return &Engine{} }
@@ -123,7 +139,7 @@ func (*Engine) Candidates(h *format.GzipHeader, size int64) [][]engine.DeflatePa
 }
 
 // NewWriter returns a writer that compresses into w. Close flushes.
-func (*Engine) NewWriter(w io.Writer, p engine.DeflateParams) (io.WriteCloser, error) {
+func (e *Engine) NewWriter(w io.Writer, p engine.DeflateParams) (io.WriteCloser, error) {
 	if p.Level < 0 || p.Level > 9 {
 		return nil, fmt.Errorf("pigz: level %d out of range 0..9", p.Level)
 	}
@@ -154,7 +170,7 @@ func (*Engine) NewWriter(w io.Writer, p engine.DeflateParams) (io.WriteCloser, e
 		if p.SingleThread {
 			err = c.single(pr)
 		} else {
-			err = c.parallel(pr)
+			err = c.parallel(pr, e.workers())
 		}
 		if err != nil {
 			wr.err = err
@@ -360,12 +376,146 @@ func (c *compressor) endPiece(run func(flush C.int) error, more bool, afterPrime
 	return nil
 }
 
-// parallel is parallel_compress and compress_thread with the threads taken
-// out: the same jobs, compressed in order on one stream. The input buffer
-// juggling is kept as is because it decides where jobs end, in particular
-// at end of input, where the bytes after the last rsync hit stay in the
-// same job.
-func (c *compressor) parallel(r io.Reader) error {
+// job is one of parallel_compress's jobs: a block of input, the dictionary
+// it is primed with, the rsync cut points within it and whether more input
+// follows. The worker that compresses it leaves the output and any error
+// behind and closes done.
+type job struct {
+	curr    *space
+	lens    []int
+	hasLens bool
+	dict    *space
+	more    bool
+	out     bytes.Buffer
+	err     error
+	done    chan struct{}
+}
+
+// errStopped ends job cutting once the output side has failed; the
+// output's error is what parallel reports.
+var errStopped = errors.New("pigz: stopped")
+
+// parallel is parallel_compress and compress_thread: jobs are cut from the
+// input in order on this goroutine (cutJobs) and compressed by workers
+// goroutines, each on its own zlib stream, and their output is written in
+// job order. A job is compressed from nothing but its own input and
+// dictionary, so the output does not depend on how jobs are scheduled.
+//
+// The first job runs alone, and the other workers are created only once
+// its output has been accepted: the candidate search feeds hundreds of
+// parameter sets through here and rejects most of them at their first
+// block, and a rejected candidate must cost one job, not one per worker.
+func (c *compressor) parallel(r io.Reader, workers int) error {
+	if workers < 1 {
+		workers = 1
+	}
+	out := c.w // c itself is worker 0 and writes into job buffers from here
+	// jobs is unbuffered so that only the jobs being compressed are in
+	// flight: once the output fails, what is left to finish is one job per
+	// worker rather than a queue of them.
+	jobs := make(chan *job)
+	order := make(chan *job, 2*workers)
+	stop := make(chan struct{})
+	var stopOnce sync.Once
+	fail := func() { stopOnce.Do(func() { close(stop) }) }
+	accepted := make(chan struct{}) // closed once the first job's output is written
+
+	var wg sync.WaitGroup
+	start := func(s *compressor) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := range jobs {
+				select {
+				case <-stop:
+					// The output has failed; nothing more is written.
+				default:
+					s.w = &j.out
+					j.err = s.compressJob(j.curr, j.lens, j.hasLens, j.dict, j.more)
+				}
+				close(j.done)
+			}
+		}()
+	}
+	start(c)
+	written := make(chan error, 1)
+	go func() {
+		var err error
+		first := true
+		for j := range order {
+			<-j.done
+			if err != nil {
+				continue
+			}
+			if err = j.err; err == nil {
+				_, err = out.Write(j.out.Bytes())
+			}
+			if err != nil {
+				fail()
+				continue
+			}
+			if first {
+				first = false
+				close(accepted)
+			}
+		}
+		written <- err
+	}()
+
+	var extra []*compressor
+	defer func() {
+		for _, s := range extra {
+			s.free()
+		}
+	}()
+	cut := 0
+	// A job is handed to the workers before it is queued for output, so
+	// every job the writer waits for is one a worker will finish.
+	err := c.cutJobs(r, func(j *job) error {
+		if cut == 1 {
+			select {
+			case <-accepted:
+			case <-stop:
+				return errStopped
+			}
+			for len(extra) < workers-1 {
+				s, err := newCompressor(nil, c.level, c.strategy, c.block, c.setdict, c.rsync)
+				if err != nil {
+					return err
+				}
+				extra = append(extra, s)
+				start(s)
+			}
+		}
+		cut++
+		j.done = make(chan struct{})
+		select {
+		case jobs <- j:
+		case <-stop:
+			return errStopped
+		}
+		select {
+		case order <- j:
+		case <-stop:
+			return errStopped
+		}
+		return nil
+	})
+	close(jobs)
+	wg.Wait()
+	close(order)
+	if werr := <-written; werr != nil {
+		return werr
+	}
+	return err
+}
+
+// cutJobs is the job cutting of parallel_compress: it reads the input and
+// hands every job to emit in order. The input buffer juggling is kept as
+// pigz has it because it decides where jobs end, in particular at end of
+// input, where the bytes after the last rsync hit stay in the same job.
+// A job's buffers are not touched after it is emitted.
+func (c *compressor) cutJobs(r io.Reader, emit func(*job) error) error {
 	newSpace := func() *space { return &space{buf: make([]byte, c.block)} }
 	hash := uint32(rsyncHit)
 	var (
@@ -487,7 +637,7 @@ func (c *compressor) parallel(r io.Reader) error {
 			}
 		}
 
-		if err := c.compressJob(curr, lens, hasLens, jobDict, more); err != nil {
+		if err := emit(&job{curr: curr, lens: lens, hasLens: hasLens, dict: jobDict, more: more}); err != nil {
 			return err
 		}
 		if !more {

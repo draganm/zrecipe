@@ -149,9 +149,11 @@ for input that fits in one block. The engine drives the system zlib exactly
 as pigz 2.8 does, covering both of pigz's code paths (`-p 1` keeps one
 stream and flushes at the same boundaries; more threads reset per block),
 `--independent`, `--rsyncable`, `-b` block sizes, and the `-H`/`-U`
-strategies. zopfli (`-11`) is not covered. Its version string names both
-the pigz release ported and the zlib linked, since the output depends on
-both.
+strategies. zopfli (`-11`) is not covered. Like pigz, the engine compresses
+the blocks of the parallel path concurrently, on `Engine.Workers` zlib
+streams (GOMAXPROCS by default); the output does not depend on the count.
+Its version string names both the pigz release ported and the zlib linked,
+since the output depends on both.
 
 `pgzip` reproduces klauspost/pgzip, the parallel gzip written in Go that
 umoci compresses layers with, and through umoci rockcraft: every Canonical
