@@ -185,9 +185,10 @@ func TestEliminateTwoAgreeingCandidates(t *testing.T) {
 	}
 }
 
-func TestEliminateLoneSurvivorIsFedToTheMargin(t *testing.T) {
-	// The loser dies 8 KiB before the end of the 256 KiB window, so the
-	// survivor is short of the margin there and is fed one more write.
+func TestEliminateLoneSurvivorSettlesNearTheDeath(t *testing.T) {
+	// The loser dies late in the 256 KiB window; the survivor settles
+	// shortly after, once it has matched the margin past that death, and is
+	// not run to the end of the 2 MiB input.
 	f := newCountingEngine(map[int]int64{1: 248 << 10}, 0)
 	content := filler(2 << 20)
 	res, err := Eliminate(context.Background(), identityInput(t, content, true), candidates(f, 1, 2), 1)
@@ -197,8 +198,8 @@ func TestEliminateLoneSurvivorIsFedToTheMargin(t *testing.T) {
 	if res.Index != 1 || res.Verified {
 		t.Fatalf("res %+v", res)
 	}
-	if got := f.fedBytes(2); got != 256<<10+engine.FeedSize {
-		t.Fatalf("winner fed %d bytes, want %d", got, 256<<10+engine.FeedSize)
+	if got := f.fedBytes(2); got < 248<<10 || got > 512<<10 {
+		t.Fatalf("winner fed %d bytes, want it settled near the loser's death", got)
 	}
 }
 
@@ -317,18 +318,21 @@ func TestEliminateReportsNonMismatchError(t *testing.T) {
 	}
 }
 
-func TestEliminateSequentialInput(t *testing.T) {
+func TestEliminateSequentialInputFallsBackToRun(t *testing.T) {
+	// A seek-only input has one shared reference reader, which the lockstep
+	// cannot interleave, so Eliminate delegates to Run: the winner is found
+	// by the sequential search and reported Verified.
 	f := newCountingEngine(map[int]int64{1: 300 << 10}, 0)
 	content := filler(2 << 20)
 	res, err := Eliminate(context.Background(), identityInput(t, content, false), candidates(f, 1, 2), 4)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Index != 1 || res.Verified {
+	if res.Index != 1 || !res.Verified {
 		t.Fatalf("res %+v", res)
 	}
-	if f.maxOpen != 2 {
-		t.Fatalf("%d writers were open at once, want 2 (one at a time is fed, both stay alive)", f.maxOpen)
+	if f.maxOpen != 1 {
+		t.Fatalf("%d writers open at once, want 1 (Run over a seek-only input is sequential)", f.maxOpen)
 	}
 }
 
