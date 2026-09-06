@@ -136,6 +136,17 @@ opens with a long run of zeros makes every zlib memory level and window
 agree until real data appears); on such an input the elimination costs
 what the search costs today and nothing more.
 
+Survivors that are all tested and still agree once the window has
+reached `AgreeLimit` (4 MiB, the largest block any candidate buffers
+before it emits, so by then every candidate has shown its first output)
+go to `Run` the same way. Two candidates that agree that far are usually
+engine paths that agree to the end, pigz's parallel and single-thread
+paths at the lazy-matching levels among them: the lockstep would run the
+slowest of them over the whole spool, where `Run` completes the earliest
+in list order and cancels the rest. Measured on a 48 MiB pigz level 9
+layer (137 MiB of tar), `Start` went from 9.5 s to 3.3 s (added
+2026-09-06).
+
 Correctness: a candidate that reproduces the input never dies, so it is
 in every alive set. The single-survivor exit happens only when every
 other candidate is a proven non-match; a fallback evaluates every
