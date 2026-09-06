@@ -96,7 +96,13 @@ func Eliminate(ctx context.Context, in *Input, cands []Candidate, parallelism in
 			// match and the first in list order is the answer.
 			return e.result(c), nil
 		}
-		if len(e.alive) == 1 && e.alive[0].tested {
+		tested := 0
+		for _, c := range e.alive {
+			if c.tested {
+				tested++
+			}
+		}
+		if len(e.alive) == 1 && tested == 1 {
 			c := e.alive[0]
 			if c.pos-e.lastDeath < Margin {
 				if err := e.feed(c, min(e.size, roundUp(e.lastDeath+Margin, engine.FeedSize))); err != nil {
@@ -109,6 +115,15 @@ func Eliminate(ctx context.Context, in *Input, cands []Candidate, parallelism in
 			}
 			return e.result(c), nil
 		}
+		// Grow the window fourfold each round. Two agreeing tested
+		// candidates are told apart fastest by long windows; buffering
+		// candidates (pigz, pgzip) that have not emitted keep the
+		// elimination going until they do, at their block size, and a
+		// larger step reaches that in fewer rounds. Overshooting the point
+		// where a candidate emits costs nothing: a wrong candidate still
+		// diverges within its first block of output, and the survivor is
+		// fed no further than the last buffering candidate's block whatever
+		// the step.
 		window = min(e.size, window*windowGrowth)
 	}
 }

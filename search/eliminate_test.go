@@ -240,7 +240,8 @@ func TestEliminateUntestedCandidateWaitsForItsBlock(t *testing.T) {
 	// The producer buffers 512 KiB before it writes anything, like a pgzip
 	// candidate filling its first block; the others die at once. The
 	// elimination cannot settle before the window reaches the block, and
-	// settles right after.
+	// settles once it is out, having fed the producer far less than the
+	// 4 MiB input.
 	f := newCountingEngine(map[int]int64{1: 1, 2: 1}, 512<<10)
 	content := filler(4 << 20)
 	res, err := Eliminate(context.Background(), identityInput(t, content, true), candidates(f, 1, 2, 3), 2)
@@ -250,8 +251,10 @@ func TestEliminateUntestedCandidateWaitsForItsBlock(t *testing.T) {
 	if res.Index != 2 || res.Verified {
 		t.Fatalf("res %+v", res)
 	}
-	if got := f.fedBytes(3); got != 1<<20 {
-		t.Fatalf("producer fed %d bytes, want 1 MiB", got)
+	// Windows grow 64, 256, 1024 KiB: the block is out at 1 MiB, well
+	// short of the 4 MiB input.
+	if got := f.fedBytes(3); got < 512<<10 || got > 2<<20 {
+		t.Fatalf("producer fed %d bytes, want between the block and 2 MiB", got)
 	}
 }
 
