@@ -362,3 +362,25 @@ func TestEliminateFeedsFixedSizeWrites(t *testing.T) {
 		t.Fatalf("%d writes", len(writes))
 	}
 }
+
+func TestEliminateAgreeingSurvivorsGoToRunPastTheBound(t *testing.T) {
+	// Levels 1 and 2 both reproduce the input and nothing else is alive. The
+	// lockstep would carry both to the end of the 12 MiB input; past
+	// AgreeLimit the survivors go to Run instead, which with one worker
+	// completes level 1 and never touches level 2 again.
+	f := newCountingEngine(map[int]int64{}, 0)
+	content := filler(12 << 20)
+	res, err := Eliminate(context.Background(), identityInput(t, content, true), candidates(f, 1, 2), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Index != 0 || !res.Verified {
+		t.Fatalf("res %+v", res)
+	}
+	if got := f.fedBytes(2); got > AgreeLimit {
+		t.Fatalf("level 2 fed %d bytes, want at most %d: the lockstep must stop once every survivor is tested and past the bound", got, AgreeLimit)
+	}
+	if got := f.fedBytes(1); got < int64(len(content)) {
+		t.Fatalf("level 1 fed %d bytes, want the whole input", got)
+	}
+}

@@ -23,6 +23,15 @@ const (
 	MaxLockstep = 2
 	// windowGrowth multiplies the window from one round to the next.
 	windowGrowth = 4
+	// AgreeLimit is how far the lockstep carries survivors that are all
+	// tested and still agree: the largest block any candidate buffers
+	// before it emits, so every candidate has shown its first output by
+	// then. Past it the survivors go to Run, which completes the earliest
+	// in list order and cancels the rest, where the lockstep would run the
+	// slowest of them over the whole spool: pigz's parallel and
+	// single-thread paths agree on most inputs at the lazy-matching levels,
+	// and the single-thread one compresses on one core.
+	AgreeLimit = 4 << 20
 )
 
 // candidate is one contender's state across rounds. A candidate is tested
@@ -67,9 +76,10 @@ type elimination struct {
 // its last competitor died, without reading the rest of the spool, and
 // reports that with Verified false; a candidate that reached the spool's
 // end is Verified. When more than MaxLockstep tested candidates survive a
-// window the elimination stops and Run, the sequential search, decides
-// among the candidates still in play, so an input many candidates agree on
-// for a long stretch costs what Run costs and no more. It returns
+// window, or when every survivor is tested and they still agree past
+// AgreeLimit, the elimination stops and Run, the sequential search,
+// decides among the candidates still in play, so an input many candidates
+// agree on for a long stretch costs what Run costs and no more. It returns
 // ErrNoMatch when every candidate diverged.
 func Eliminate(ctx context.Context, in *Input, cands []Candidate, parallelism int) (*Result, error) {
 	if len(cands) == 0 {
@@ -126,6 +136,9 @@ func Eliminate(ctx context.Context, in *Input, cands []Candidate, parallelism in
 				}
 			}
 			return e.result(c), nil
+		}
+		if tested == len(e.alive) && window >= AgreeLimit {
+			return e.fallback()
 		}
 		// Grow the window fourfold each round. Two agreeing tested
 		// candidates are told apart fastest by long windows; buffering
