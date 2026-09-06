@@ -28,7 +28,11 @@ const (
 // candidate is one contender's state across rounds. A candidate is tested
 // once its engine has produced output and that output matched; until then
 // the engine is buffering (pigz fills its first job, pgzip its first block)
-// and nothing is known about it.
+// and nothing is known about it. cw compares the engine's output against a
+// reader over the whole reference, read sequentially as output arrives;
+// the engine writes cw (from a worker goroutine, for pigz) while the
+// elimination reads its Matched and Err between windows, which cw
+// synchronizes.
 type candidate struct {
 	idx      int
 	w        io.WriteCloser
@@ -39,7 +43,7 @@ type candidate struct {
 	tested   bool
 	complete bool // fed to the end, closed, trailer matched: a full match
 	dead     bool
-	deathPos int64 // the end of the write a dead candidate diverged in
+	deathPos int64 // the input position a dead candidate had reached
 	err      error // a non-mismatch failure that killed it
 }
 
@@ -71,7 +75,15 @@ func Eliminate(ctx context.Context, in *Input, cands []Candidate, parallelism in
 	if len(cands) == 0 {
 		return nil, fmt.Errorf("%w: no candidates", ErrNoMatch)
 	}
-	if parallelism < 1 || !in.Concurrent {
+	// The lockstep keeps every candidate's reference reader open across
+	// rounds. That needs independent readers, which payloadSource only
+	// provides over an io.ReaderAt; a seek-only input has one shared
+	// reader, so fall back to the sequential search, which runs each
+	// candidate to completion one at a time.
+	if !in.Concurrent {
+		return Run(ctx, in, cands, 1)
+	}
+	if parallelism < 1 {
 		parallelism = 1
 	}
 	e := &elimination{ctx: ctx, in: in, cands: cands, parallelism: parallelism, size: in.Spool.Size()}
@@ -189,37 +201,45 @@ func (e *elimination) round(window int64) (fallback bool, err error) {
 // feed hands c the spool from its position to target, starting its engine
 // on first use and finishing it when target is the spool's end. It returns
 // only errors that end the elimination (the context, the input); a
-// candidate's own failure marks it dead.
+// candidate's own failure marks it dead. A candidate whose engine writes
+// its output asynchronously (pigz) may not have produced the output for
+// this window when feed returns; feed checks cw.Err after each window so a
+// divergence that has surfaced kills the candidate, and Close at the end
+// forces the rest out.
 func (e *elimination) feed(c *candidate, target int64) error {
 	if c.dead || c.complete {
 		return nil
 	}
 	if !c.started {
 		c.started = true
-		c.cw = NewCompare(e.ctx, nil)
+		// One reader over the whole reference, read sequentially as the
+		// engine produces output. payloadSource gives each candidate its
+		// own reader (a section reader over the io.ReaderAt input), so the
+		// candidates run concurrently without sharing a position.
+		ref, err := e.in.Payload(0)
+		if err != nil {
+			return err
+		}
+		c.cw = NewCompare(e.ctx, ref)
 		w, err := newWriter(e.in, e.cands[c.idx], c.cw)
 		if err != nil {
 			return e.kill(c, err)
 		}
 		c.w = w
 	}
-	ref, err := e.in.Payload(c.cw.n)
-	if err != nil {
-		return err
-	}
-	c.cw.ref = ref
 	if n := target - c.pos; n > 0 {
 		fed, err := engine.Feed(c.w, e.in.Spool.Section(c.pos, n))
 		c.pos += fed
 		if err != nil {
-			// The divergence is somewhere inside the write that failed,
-			// so the death is placed at that write's end: a survivor's
-			// margin is then counted from past the actual divergence.
-			c.pos = min(target, c.pos+engine.FeedSize)
 			return e.kill(c, err)
 		}
 	}
-	c.tested = c.cw.n > 0
+	// A candidate whose output has already diverged (surfaced by cw even
+	// if the engine has not returned the error yet) is out.
+	if cerr := c.cw.Err(); cerr != nil {
+		return e.kill(c, cerr)
+	}
+	c.tested = c.cw.Matched() > 0
 	if target < e.size {
 		return nil
 	}
@@ -243,7 +263,8 @@ func (e *elimination) feed(c *candidate, target int64) error {
 // returned; a mismatch is the expected way out; anything else is
 // remembered as the first non-mismatch error for ErrNoMatch's message. The
 // engine writer is closed so that engines holding C memory release it;
-// whatever it writes while closing is compared and ignored.
+// whatever it writes while closing is compared against the reference under
+// cw's lock and ignored.
 func (e *elimination) kill(c *candidate, err error) error {
 	if cerr := e.ctx.Err(); cerr != nil {
 		return cerr
