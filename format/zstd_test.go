@@ -216,3 +216,121 @@ func TestZstdFrameLengthTruncated(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+// zstdHeadFlush is the shape containers/image produces: the first head
+// bytes go through Write, then the encoder is flushed and the rest is
+// streamed, which is what Encoder.ReadFrom does after a Write.
+func zstdHeadFlush(t *testing.T, data []byte, head int) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	enc, err := zstd.NewWriter(&buf, zstd.WithEncoderConcurrency(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := enc.Write(data[:head]); err != nil {
+		t.Fatal(err)
+	}
+	if err := enc.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := enc.Write(data[head:]); err != nil {
+		t.Fatal(err)
+	}
+	if err := enc.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func TestZstdFrameLengthFirstBlock(t *testing.T) {
+	h, _, err := ZstdFrameLength(bufio.NewReader(bytes.NewReader(zstdHeadFlush(t, sample(300000), 8))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.FirstBlock.Last || h.FirstBlock.Type != ZstdBlockRaw || h.FirstBlock.Size != 8 {
+		t.Fatalf("first block %+v, want a raw non-last block of 8 bytes", h.FirstBlock)
+	}
+	if n, ok := h.FlushedHead(128 << 10); !ok || n != 8 {
+		t.Fatalf("FlushedHead = %d, %v; want 8, true", n, ok)
+	}
+
+	h, _, err = ZstdFrameLength(bufio.NewReader(bytes.NewReader(zstdStream(t, sample(300000)))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.FirstBlock.Last || h.FirstBlock.Type != ZstdBlockCompressed {
+		t.Fatalf("first block %+v, want a compressed non-last block", h.FirstBlock)
+	}
+	if _, ok := h.FlushedHead(128 << 10); ok {
+		t.Fatal("a plain stream reported a flushed head")
+	}
+
+	// A small input flushed after its head: the head block is still not
+	// the last one and still counts.
+	h, _, err = ZstdFrameLength(bufio.NewReader(bytes.NewReader(zstdHeadFlush(t, sample(1000), 8))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, ok := h.FlushedHead(128 << 10); !ok || n != 8 {
+		t.Fatalf("FlushedHead = %d, %v; want 8, true", n, ok)
+	}
+
+	// A tiny frame is one block, raw and last: nothing was flushed early.
+	h, _, err = ZstdFrameLength(bufio.NewReader(bytes.NewReader(zstdAll(t, []byte("tiny"), zstd.WithEncoderCRC(false)))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !h.FirstBlock.Last || h.FirstBlock.Type != ZstdBlockRaw || h.FirstBlock.Size != 4 {
+		t.Fatalf("first block %+v, want a raw last block of 4 bytes", h.FirstBlock)
+	}
+	if _, ok := h.FlushedHead(128 << 10); ok {
+		t.Fatal("a single-block frame reported a flushed head")
+	}
+
+	// A full-size raw first block is what any encoder emits for
+	// incompressible input: not a flush.
+	h, _, err = ZstdFrameLength(bufio.NewReader(bytes.NewReader(zstdStream(t, random(300000)))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.FirstBlock.Type != ZstdBlockRaw || h.FirstBlock.Size != 128<<10 {
+		t.Fatalf("first block %+v, want a raw block of 128 KiB", h.FirstBlock)
+	}
+	if _, ok := h.FlushedHead(128 << 10); ok {
+		t.Fatal("a full raw first block reported a flushed head")
+	}
+
+	// klauspost's fastest level cuts 64 KiB blocks: a raw or RLE block of
+	// that size is full for it and short for a 128 KiB producer.
+	h, _, err = ZstdFrameLength(bufio.NewReader(bytes.NewReader(zstdStream(t, make([]byte, 300000), zstd.WithEncoderLevel(zstd.SpeedFastest)))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.FirstBlock.Type != ZstdBlockRLE || h.FirstBlock.Size != 64<<10 {
+		t.Fatalf("first block %+v, want an RLE block of 64 KiB", h.FirstBlock)
+	}
+	if _, ok := h.FlushedHead(64 << 10); ok {
+		t.Fatal("a full 64 KiB block reported a flushed head for a 64 KiB producer")
+	}
+	if n, ok := h.FlushedHead(128 << 10); !ok || n != 64<<10 {
+		t.Fatalf("FlushedHead(128 KiB) = %d, %v; want 65536, true", n, ok)
+	}
+
+	// ParseZstdFrameHeader stops before the blocks: the zero FirstBlock it
+	// leaves is not a flushed head either.
+	if _, ok := parse(t, zstdHeadFlush(t, sample(300000), 8)).FlushedHead(128 << 10); ok {
+		t.Fatal("an unparsed first block reported a flushed head")
+	}
+}
+
+func random(n int) []byte {
+	b := make([]byte, n)
+	x := uint32(2463534242)
+	for i := range b {
+		x ^= x << 13
+		x ^= x >> 17
+		x ^= x << 5
+		b[i] = byte(x)
+	}
+	return b
+}

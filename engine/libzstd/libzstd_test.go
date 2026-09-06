@@ -260,3 +260,28 @@ func TestRoundTrip(t *testing.T) {
 }
 
 func bufioReader(b []byte) *bufio.Reader { return bufio.NewReader(bytes.NewReader(b)) }
+
+// TestCandidatesNoneForFlushedHead: a first block flushed before it was
+// full cannot come from libzstd, whose streaming paths cut full blocks
+// until the end of the input, so there is nothing to try. Every candidate
+// would otherwise die at that block, the job-based ones only after filling
+// their first job.
+func TestCandidatesNoneForFlushedHead(t *testing.T) {
+	var buf bytes.Buffer
+	enc, err := zstd.NewWriter(&buf, zstd.WithEncoderConcurrency(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := fixtures.Text(300000)
+	enc.Write(data[:8])
+	enc.Flush()
+	enc.Write(data[8:])
+	enc.Close()
+	h, _, err := format.ZstdFrameLength(bufio.NewReader(bytes.NewReader(buf.Bytes())))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(enginetest.Flatten(New().Candidates(h, int64(len(data))))); n != 0 {
+		t.Fatalf("%d candidates for a frame with a flushed 8-byte head, want none", n)
+	}
+}

@@ -90,6 +90,13 @@ type ZstdParams struct {
 	// EncodeAll encoding path (which buffers the whole input and encodes it
 	// in a single call) rather than its streaming writer.
 	EncodeAll bool `json:"encode_all,omitempty"`
+	// Head is the number of bytes the klauspost-zstd engine writes before
+	// it flushes the encoder once and streams the rest: the shape of a
+	// producer that wrote a prefix with Write and handed the remainder to
+	// Encoder.ReadFrom, which flushes what Write buffered as a block of
+	// its own. containers/image (skopeo, podman, buildah) does this with
+	// the 8 bytes it peeked at to detect the source compression.
+	Head int `json:"head,omitempty"`
 }
 
 // ZstdEngine produces complete zstd frames.

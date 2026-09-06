@@ -10,6 +10,8 @@ import (
 
 	"github.com/draganm/zrecipe/engine"
 	"github.com/draganm/zrecipe/engine/goflate"
+	"github.com/klauspost/compress/zstd"
+
 	"github.com/draganm/zrecipe/engine/kpzstd"
 	"github.com/draganm/zrecipe/engine/pgzip"
 	"github.com/draganm/zrecipe/enginetest"
@@ -206,3 +208,39 @@ func TestAnalyzeCancelled(t *testing.T) {
 }
 
 var _ io.ReadSeeker = seekOnly{}
+
+// TestAnalyzeZstdWriteThenReadFrom covers the frames containers/image
+// (skopeo, podman, buildah) makes from an uncompressed layer: it writes the
+// 8 bytes it peeked at to detect the source compression, then streams the
+// rest through klauspost's Encoder.ReadFrom, which first flushes those 8
+// bytes as a block of their own.
+func TestAnalyzeZstdWriteThenReadFrom(t *testing.T) {
+	data := fixtures.Mixed(600 << 10)
+	var buf bytes.Buffer
+	enc, err := zstd.NewWriter(&buf, zstd.WithEncoderLevel(zstd.SpeedBetterCompression))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := enc.Write(data[:8]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := enc.ReadFrom(bytes.NewReader(data[8:])); err != nil {
+		t.Fatal(err)
+	}
+	if err := enc.Close(); err != nil {
+		t.Fatal(err)
+	}
+	file := buf.Bytes()
+
+	p := analyze(t, file, nil)
+	if p.Engine != "klauspost-zstd" || p.Zstd == nil || p.Zstd.Head != 8 || p.Zstd.Level != int(zstd.SpeedBetterCompression) {
+		t.Fatalf("got %s %+v, want klauspost-zstd level 3 with head 8", p.Engine, p.Zstd)
+	}
+	var out bytes.Buffer
+	if err := Recompress(context.Background(), p, bytes.NewReader(data), &out, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(out.Bytes(), file) {
+		t.Fatal("Recompress does not reproduce the file")
+	}
+}

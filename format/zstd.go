@@ -27,6 +27,53 @@ type ZstdFrameHeader struct {
 	// ZSTD_e_end is signalled with no input after all data was fed with
 	// ZSTD_e_continue.
 	EmptyLastBlock bool
+	// FirstBlock is the header of the frame's first block, set by
+	// ZstdFrameLength.
+	FirstBlock ZstdBlockHeader
+}
+
+// ZstdBlockType is the Block_Type field of a block header.
+type ZstdBlockType int
+
+const (
+	ZstdBlockRaw        ZstdBlockType = 0
+	ZstdBlockRLE        ZstdBlockType = 1
+	ZstdBlockCompressed ZstdBlockType = 2
+)
+
+// ZstdBlockHeader is a parsed block header (RFC 8878 section 3.1.1.2).
+type ZstdBlockHeader struct {
+	Last bool
+	Type ZstdBlockType
+	// Size is the header's Block_Size field: the content size of a raw or
+	// RLE block, the on-disk size of a compressed one.
+	Size int
+}
+
+// FlushedHead reports the content size of a first block that the producer
+// flushed before it was full: a raw or RLE block that is not the last one
+// and holds fewer than blockSize bytes (or fewer than the window, when the
+// window is smaller). blockSize is the block the producer under
+// consideration cuts its input into: 128 KiB for libzstd and klauspost,
+// 64 KiB for klauspost's fastest level. A streaming encoder emits only
+// full blocks until the end of its input, so a short one at the start
+// means the producer wrote that much, flushed, and went on:
+// containers/image (skopeo, podman, buildah) writes the bytes it peeked
+// at to detect the source compression, then streams the rest through
+// klauspost's Encoder.ReadFrom, which flushes what Write buffered first.
+func (h *ZstdFrameHeader) FlushedHead(blockSize int) (int, bool) {
+	b := h.FirstBlock
+	if b.Last || b.Type == ZstdBlockCompressed || b.Size == 0 {
+		return 0, false
+	}
+	full := uint64(blockSize)
+	if h.WindowSize > 0 && h.WindowSize < full {
+		full = h.WindowSize
+	}
+	if uint64(b.Size) >= full {
+		return 0, false
+	}
+	return b.Size, true
 }
 
 // ParseZstdFrameHeader reads a zstd frame header from r and leaves r at the
@@ -123,11 +170,14 @@ func ZstdFrameLength(r *bufio.Reader) (*ZstdFrameHeader, int64, error) {
 		last := v&1 != 0
 		typ := (v >> 1) & 3
 		size := int(v >> 3)
-		switch typ {
-		case 1: // RLE block: one byte on disk
-			size = 1
-		case 3:
+		if typ == 3 {
 			return nil, 0, fmt.Errorf("%w: zstd reserved block type", ErrBadHeader)
+		}
+		if blocks == 0 {
+			h.FirstBlock = ZstdBlockHeader{Last: last, Type: ZstdBlockType(typ), Size: size}
+		}
+		if typ == 1 { // RLE block: one byte on disk
+			size = 1
 		}
 		if _, err := r.Discard(size); err != nil {
 			return nil, 0, fmt.Errorf("%w: zstd block truncated: %v", ErrBadHeader, err)
