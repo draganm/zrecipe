@@ -198,3 +198,106 @@ func TestConfirmOnceAndNotAfterClose(t *testing.T) {
 		t.Fatal("Confirm after Close succeeded")
 	}
 }
+
+// corruptingEngine wraps a deflate engine and flips one byte of its output
+// once at bytes have gone by, so every candidate reproduces the input up to
+// there and diverges after.
+type corruptingEngine struct {
+	engine.DeflateEngine
+	at int64
+}
+
+func (c *corruptingEngine) Name() string { return "corrupting" }
+
+func (c *corruptingEngine) NewWriter(w io.Writer, p engine.DeflateParams) (io.WriteCloser, error) {
+	return c.DeflateEngine.NewWriter(&corruptAt{w: w, at: c.at}, p)
+}
+
+type corruptAt struct {
+	w   io.Writer
+	at  int64
+	pos int64
+}
+
+func (c *corruptAt) Write(p []byte) (int, error) {
+	if c.at >= c.pos && c.at < c.pos+int64(len(p)) {
+		out := make([]byte, len(p))
+		copy(out, p)
+		out[c.at-c.pos] ^= 0xff
+		p = out
+	}
+	c.pos += int64(len(p))
+	return c.w.Write(p)
+}
+
+// TestConfirmVerifyLimit: with Options.VerifyLimit the confirming pass
+// accepts the candidate once that many compressed bytes matched and still
+// streams the whole content to the tee; without it, or with a limit past
+// the divergence, the same candidate is not reproducible.
+func TestConfirmVerifyLimit(t *testing.T) {
+	data := fixtures.Text(6 << 20)
+	file := enginetest.Gzip(t, goflate.New(), engine.DeflateParams{Level: 6}, data)
+	const divergeAt = 512 << 10
+	if len(file) <= 2*divergeAt {
+		t.Fatalf("fixture compresses to %d bytes, want more than %d", len(file), 2*divergeAt)
+	}
+	eng := &corruptingEngine{DeflateEngine: goflate.New(), at: divergeAt}
+	for _, tc := range []struct {
+		name  string
+		limit int64
+		ok    bool
+	}{
+		{"whole input", 0, false},
+		{"below the divergence", 256 << 10, true},
+		{"past the divergence", 1 << 20, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, err := Start(context.Background(), bytes.NewReader(file), &Options{Engines: []engine.Engine{eng}, Parallelism: 4, VerifyLimit: tc.limit})
+			if err != nil {
+				t.Fatalf("Start: %v", err)
+			}
+			defer a.Close()
+			if a.Verified() {
+				t.Fatal("the elimination verified the whole input; the test wants Confirm to decide")
+			}
+			var tee bytes.Buffer
+			p, err := a.Confirm(context.Background(), &tee)
+			if !tc.ok {
+				if !errors.Is(err, ErrNotReproducible) {
+					t.Fatalf("got %v, want ErrNotReproducible", err)
+				}
+				if tee.Len() >= len(data) {
+					t.Fatalf("tee received the whole content (%d bytes) after a divergence", tee.Len())
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Confirm: %v", err)
+			}
+			if p.Engine != "corrupting" || p.Gzip.Level != 6 {
+				t.Fatalf("params %s %+v", p.Engine, p.Gzip.DeflateParams)
+			}
+			if !bytes.Equal(tee.Bytes(), data) {
+				t.Fatalf("tee received %d bytes, want the whole content (%d)", tee.Len(), len(data))
+			}
+		})
+	}
+}
+
+// TestConfirmVerifyLimitBeyondInput: a limit the input never reaches leaves
+// the confirming pass checking to the end, so a divergence in the last
+// bytes of the deflate stream (the engine's output excludes the gzip
+// header and trailer) is still caught.
+func TestConfirmVerifyLimitBeyondInput(t *testing.T) {
+	data := fixtures.Text(2 << 20)
+	file := enginetest.Gzip(t, goflate.New(), engine.DeflateParams{Level: 6}, data)
+	eng := &corruptingEngine{DeflateEngine: goflate.New(), at: int64(len(file)) - 30}
+	a, err := Start(context.Background(), bytes.NewReader(file), &Options{Engines: []engine.Engine{eng}, VerifyLimit: 1 << 40})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer a.Close()
+	if _, err := a.Confirm(context.Background(), io.Discard); !errors.Is(err, ErrNotReproducible) {
+		t.Fatalf("got %v, want ErrNotReproducible", err)
+	}
+}

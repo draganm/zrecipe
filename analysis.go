@@ -96,9 +96,9 @@ func (a *Analysis) Compressed() Digest { return a.params.Compressed }
 func (a *Analysis) Uncompressed() Digest { return a.params.Uncompressed }
 
 // Verified reports that the elimination already reproduced the whole input
-// (a small input, one the fallback search decided, or an uncompressed
-// one). Confirm runs the rebuild regardless, so callers need not care; it
-// is exposed for logs and tests.
+// (a small input, one the fallback search ran to the end, or an
+// uncompressed one). Confirm runs the rebuild regardless, so callers need
+// not care; it is exposed for logs and tests.
 func (a *Analysis) Verified() bool { return a.verified }
 
 // Confirm reads the content once, writes every block to tee (nil to skip)
@@ -108,8 +108,10 @@ func (a *Analysis) Verified() bool { return a.verified }
 // tee's own error, wrapped, when a tee write fails; the context's error; or
 // an engine error. After a failure tee has received a prefix of the
 // content. A block reaches tee before the rebuilder sees it, so tee may be
-// a few blocks ahead of the comparison when the pass stops. Confirm may be
-// called once.
+// a few blocks ahead of the comparison when the pass stops. With
+// Options.VerifyLimit set the rebuild stops once that many bytes matched
+// and the rest of the content goes to tee alone. Confirm may be called
+// once.
 func (a *Analysis) Confirm(ctx context.Context, tee io.Writer) (*Params, error) {
 	if a.closed {
 		return nil, errors.New("zrecipe: Confirm after Close")
@@ -134,6 +136,7 @@ func (a *Analysis) Confirm(ctx context.Context, tee io.Writer) (*Params, error) 
 		defer close(readDone)
 		buf := make([]byte, engine.FeedSize)
 		src := a.spool.Reader()
+		feeding := true // the rebuilder is still reading the pipe
 		for {
 			if err := cctx.Err(); err != nil {
 				p.CloseWrite(context.Cause(cctx))
@@ -147,9 +150,14 @@ func (a *Analysis) Confirm(ctx context.Context, tee io.Writer) (*Params, error) 
 					p.CloseWrite(werr)
 					return
 				}
-				if _, werr := p.Write(buf[:n]); werr != nil {
-					// The rebuilder has stopped; it knows why.
-					return
+				if feeding {
+					if _, werr := p.Write(buf[:n]); werr != nil {
+						// The rebuilder has stopped reading: satisfied at
+						// the verify limit, so the rest of the content
+						// goes to tee alone, or failed, in which case it
+						// cancelled cctx and the next round sees that.
+						feeding = false
+					}
 				}
 			}
 			switch {
@@ -167,19 +175,25 @@ func (a *Analysis) Confirm(ctx context.Context, tee io.Writer) (*Params, error) 
 	}()
 
 	var rerr error
+	var limited bool // the rebuild matched up to the verify limit and stopped
 	ref, err := a.payload(0)
 	if err != nil {
 		rerr = err
 	} else {
 		cw := search.NewCompare(cctx, ref)
+		cw.SetLimit(a.o.VerifyLimit)
 		rerr = rebuild(cctx, a.params, p, cw, &RecompressOptions{Engines: a.o.Engines})
-		if rerr == nil {
+		limited = cw.Limited()
+		if rerr == nil && !limited {
 			rerr = cw.AtEOF()
 		}
 	}
-	if rerr != nil {
+	if rerr != nil && !limited {
 		cancel(rerr)
 	}
+	// Release the reader from the pipe. Satisfied at the limit, the
+	// rebuilder leaves the reader to stream the rest of the content to
+	// tee; otherwise the reader is done or about to see the cancellation.
 	p.CloseRead()
 	<-readDone
 
@@ -190,6 +204,8 @@ func (a *Analysis) Confirm(ctx context.Context, tee io.Writer) (*Params, error) 
 		return nil, fmt.Errorf("zrecipe: uncompressed writer: %w", teeErr)
 	case readErr != nil:
 		return nil, fmt.Errorf("zrecipe: spool: %w", readErr)
+	case limited:
+		return a.params, nil
 	case rerr != nil && errors.Is(rerr, search.ErrMismatch):
 		return nil, fmt.Errorf("%w: %w", ErrNotReproducible, rerr)
 	case rerr != nil:

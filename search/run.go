@@ -38,6 +38,10 @@ type Input struct {
 	Trailer          []byte
 	Spool            *Spool
 	UncompressedSize int64
+	// VerifyLimit, when positive, is how many bytes of the reference a
+	// candidate must reproduce to be accepted: it is then not fed further
+	// and the Result is not Verified. Zero runs every candidate to the end.
+	VerifyLimit int64
 }
 
 // Result is a successful search.
@@ -45,9 +49,9 @@ type Result struct {
 	Index     int
 	Candidate Candidate
 	Tried     int
-	// Verified reports that the candidate reproduced the whole input: always
-	// true from Run; Eliminate settles most inputs on a prefix and leaves it
-	// false then.
+	// Verified reports that the candidate reproduced the whole input: true
+	// from Run unless Input.VerifyLimit stopped the candidate first;
+	// Eliminate settles most inputs on a prefix and leaves it false then.
 	Verified bool
 }
 
@@ -70,6 +74,7 @@ func Run(ctx context.Context, in *Input, cands []Candidate, parallelism int) (*R
 		mu       sync.Mutex
 		next     int
 		winner   = -1
+		verified bool // the winner reproduced the whole input
 		tried    int
 		running  = map[int]context.CancelFunc{}
 		firstErr error
@@ -92,7 +97,7 @@ func Run(ctx context.Context, in *Input, cands []Candidate, parallelism int) (*R
 				tried++
 				mu.Unlock()
 
-				err := evaluate(cctx, in, cands[i])
+				whole, err := evaluate(cctx, in, cands[i])
 
 				mu.Lock()
 				delete(running, i)
@@ -101,6 +106,7 @@ func Run(ctx context.Context, in *Input, cands []Candidate, parallelism int) (*R
 				case err == nil:
 					if winner < 0 || i < winner {
 						winner = i
+						verified = whole
 						for j, c := range running {
 							if j > i {
 								c()
@@ -127,37 +133,54 @@ func Run(ctx context.Context, in *Input, cands []Candidate, parallelism int) (*R
 		}
 		return nil, fmt.Errorf("%w: tried %d candidates", ErrNoMatch, tried)
 	}
-	return &Result{Index: winner, Candidate: cands[winner], Tried: tried, Verified: true}, nil
+	return &Result{Index: winner, Candidate: cands[winner], Tried: tried, Verified: verified}, nil
 }
 
 // evaluate re-compresses the spool with one candidate and compares the
-// output against the reference. It returns nil on an exact match.
-func evaluate(ctx context.Context, in *Input, c Candidate) error {
+// output against the reference. It returns a nil error on a match and
+// reports whether the match covers the whole input, which it does not when
+// in.VerifyLimit stopped the comparison first.
+func evaluate(ctx context.Context, in *Input, c Candidate) (whole bool, err error) {
 	ref, err := in.Payload(0)
 	if err != nil {
-		return err
+		return false, err
 	}
 	cw := NewCompare(ctx, ref)
+	cw.SetLimit(in.VerifyLimit)
 	w, err := newWriter(in, c, cw)
 	if err != nil {
-		return err
+		return false, err
 	}
 	// Feed, not io.Copy: an in-memory spool's reader has a WriterTo fast
 	// path that would hand the engine everything in one Write, a shape
 	// Recompress never uses.
 	if _, err := engine.Feed(w, in.Spool.Reader()); err != nil {
 		w.Close()
-		return err
+		return limitedOr(cw, err)
 	}
 	if err := w.Close(); err != nil {
-		return err
+		return limitedOr(cw, err)
 	}
 	if len(in.Trailer) > 0 {
 		if _, err := cw.Write(in.Trailer); err != nil {
-			return err
+			return limitedOr(cw, err)
 		}
 	}
-	return cw.AtEOF()
+	if cw.Limited() {
+		return false, nil
+	}
+	return true, cw.AtEOF()
+}
+
+// limitedOr maps a failure on the way through a candidate: once cw reached
+// its limit the candidate is a match however the engine reported the stop
+// (ErrLimit itself, or its own error for a writer that failed), not a
+// whole one; otherwise err stands.
+func limitedOr(cw *Compare, err error) (bool, error) {
+	if cw.Limited() {
+		return false, nil
+	}
+	return false, err
 }
 
 // newWriter opens c's engine writer over out for the input's format.

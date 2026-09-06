@@ -384,3 +384,23 @@ func TestEliminateAgreeingSurvivorsGoToRunPastTheBound(t *testing.T) {
 		t.Fatalf("level 1 fed %d bytes, want the whole input", got)
 	}
 }
+
+// TestEliminateFallbackHonoursVerifyLimit: agreeing survivors handed to Run
+// past AgreeLimit stop at the input's VerifyLimit instead of running to the
+// end of the spool, and the answer is not Verified.
+func TestEliminateFallbackHonoursVerifyLimit(t *testing.T) {
+	f := newCountingEngine(map[int]int64{}, 0)
+	content := filler(12 << 20)
+	in := identityInput(t, content, true)
+	in.VerifyLimit = 6 << 20
+	res, err := Eliminate(context.Background(), in, candidates(f, 1, 2), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Index != 0 || res.Verified {
+		t.Fatalf("res %+v, want index 0 and not Verified", res)
+	}
+	if got := f.fedBytes(1); got >= int64(len(content)) {
+		t.Fatalf("level 1 fed %d bytes, want less than the whole input (%d)", got, len(content))
+	}
+}

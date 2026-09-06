@@ -110,6 +110,14 @@ two of each. `Options.Uncompressed` is the tee `Analyze` passes to
 first pass: an input that is not reproducible writes nothing to it, and one
 whose confirmation fails writes a prefix.
 
+`Options.VerifyLimit` bounds the recompression on large inputs: once a
+candidate has reproduced that many bytes of the compressed input, the search
+and the confirming pass accept it without running it to the end (the
+confirming pass still streams the whole content to its tee). A candidate
+that matches that far and diverges later is rare, and `Recompress` checks
+the output digest, so such a divergence still surfaces at rebuild time
+rather than silently. The default, zero, verifies every byte.
+
 `ReadParams` decodes and validates a `Params` document read back from JSON,
 rejecting an unknown schema version with `ErrParamsVersion` and an
 internally inconsistent document — malformed digest hex, or a `gzip`/`zstd`

@@ -259,3 +259,62 @@ func TestRunResultIsVerified(t *testing.T) {
 		t.Fatalf("res %+v err %v", res, err)
 	}
 }
+
+// TestRunVerifyLimit accepts a candidate once it has reproduced VerifyLimit
+// bytes of the reference, without feeding it the rest, and reports it not
+// Verified; without the limit the same candidate's late divergence makes
+// it a mismatch, and a limit past the divergence still catches it.
+func TestRunVerifyLimit(t *testing.T) {
+	content := filler(1 << 20)
+	for _, tc := range []struct {
+		name  string
+		limit int64
+		ok    bool
+	}{
+		{"whole input", 0, false},
+		{"below the divergence", 200 << 10, true},
+		{"past the divergence", 400 << 10, false},
+		{"beyond the input", 8 << 20, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newCountingEngine(map[int]int64{5: 300 << 10}, 0)
+			in := identityInput(t, content, true)
+			in.VerifyLimit = tc.limit
+			res, err := Run(context.Background(), in, candidates(f, 5), 1)
+			if !tc.ok {
+				if !errors.Is(err, ErrNoMatch) {
+					t.Fatalf("got %v, want ErrNoMatch", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.Index != 0 || res.Verified {
+				t.Fatalf("res %+v, want index 0 and not Verified", res)
+			}
+			if got := f.fedBytes(5); got >= int64(len(content)) {
+				t.Fatalf("fed %d bytes, want less than the whole input (%d)", got, len(content))
+			}
+		})
+	}
+}
+
+// TestRunVerifyLimitBeyondInputIsVerified: a limit the input never reaches
+// changes nothing, the candidate runs to the end and is Verified.
+func TestRunVerifyLimitBeyondInputIsVerified(t *testing.T) {
+	content := filler(256 << 10)
+	f := newCountingEngine(map[int]int64{}, 0)
+	in := identityInput(t, content, true)
+	in.VerifyLimit = 8 << 20
+	res, err := Run(context.Background(), in, candidates(f, 5), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Verified {
+		t.Fatalf("res %+v, want Verified", res)
+	}
+	if got := f.fedBytes(5); got != int64(len(content)) {
+		t.Fatalf("fed %d bytes, want the whole input (%d)", got, len(content))
+	}
+}
