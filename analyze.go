@@ -40,6 +40,16 @@ type Options struct {
 	Uncompressed io.Writer
 	// Engines to search. Default DefaultEngines().
 	Engines []engine.Engine
+	// VerifyLimit, when positive, accepts a candidate once it has
+	// reproduced this many bytes of the compressed input instead of
+	// running it to the end, both in the search and in the confirming
+	// pass: a candidate that matches that far and diverges later is rare
+	// enough that recompressing the rest of a large input is not worth
+	// its time. The confirming pass still streams the whole content to
+	// its tee. Zero, the default, verifies the whole input. Recompress
+	// checks the output digest, so a divergence past the limit surfaces
+	// there.
+	VerifyLimit int64
 }
 
 func (o *Options) withDefaults() *Options {
@@ -172,7 +182,7 @@ func passOneGzip(ctx context.Context, r io.ReadSeeker, o *Options) (_ *passOne, 
 	if extra > 0 {
 		return nil, fmt.Errorf("%w: multi-member gzip (%d bytes after the first member)", ErrUnsupported, extra)
 	}
-	in := &search.Input{Format: FormatGzip, Trailer: trailer[:], Spool: sp, UncompressedSize: n}
+	in := &search.Input{Format: FormatGzip, Trailer: trailer[:], Spool: sp, UncompressedSize: n, VerifyLimit: o.VerifyLimit}
 	in.Payload, in.Concurrent = payloadSource(r, int64(len(hdr.Raw)), cr.n)
 	return &passOne{
 		spool: sp,
@@ -238,7 +248,7 @@ func passOneZstd(ctx context.Context, r io.ReadSeeker, o *Options) (_ *passOne, 
 	if extra > 0 {
 		return nil, fmt.Errorf("%w: multi-frame zstd (%d bytes after the first frame)", ErrUnsupported, extra)
 	}
-	in := &search.Input{Format: FormatZstd, Spool: sp, UncompressedSize: n}
+	in := &search.Input{Format: FormatZstd, Spool: sp, UncompressedSize: n, VerifyLimit: o.VerifyLimit}
 	in.Payload, in.Concurrent = payloadSource(r, 0, cr.n)
 	return &passOne{
 		spool: sp,
