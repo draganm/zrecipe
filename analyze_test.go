@@ -16,6 +16,7 @@ import (
 	"github.com/draganm/zrecipe/engine/pgzip"
 	"github.com/draganm/zrecipe/enginetest"
 	"github.com/draganm/zrecipe/fixtures"
+	"github.com/draganm/zrecipe/format"
 )
 
 // seekOnly hides io.ReaderAt so the sequential search path is exercised.
@@ -242,5 +243,31 @@ func TestAnalyzeZstdWriteThenReadFrom(t *testing.T) {
 	}
 	if !bytes.Equal(out.Bytes(), file) {
 		t.Fatal("Recompress does not reproduce the file")
+	}
+}
+
+// bufferingZstd is a zstd engine that reports how much each candidate
+// buffers before its first output.
+type bufferingZstd struct{ *kpzstd.Engine }
+
+func (bufferingZstd) Name() string { return "buffering" }
+func (bufferingZstd) Buffered(p engine.ZstdParams, size int64) int64 {
+	return int64(p.Level) << 20
+}
+
+func TestZstdCandidatesCarryBuffered(t *testing.T) {
+	hdr := &format.ZstdFrameHeader{WindowLog: 23, WindowSize: 1 << 23, Checksum: true}
+	cands := zstdCandidates([]engine.Engine{bufferingZstd{kpzstd.New()}, kpzstd.New()}, hdr, 1<<30)
+	if len(cands) != 8 {
+		t.Fatalf("%d candidates, want 4 from each engine", len(cands))
+	}
+	for _, c := range cands {
+		want := int64(0)
+		if c.Engine.Name() == "buffering" {
+			want = int64(c.Zstd.Level) << 20
+		}
+		if c.Buffered != want {
+			t.Fatalf("%s level %d: Buffered %d, want %d", c.Engine.Name(), c.Zstd.Level, c.Buffered, want)
+		}
 	}
 }

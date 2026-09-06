@@ -404,3 +404,96 @@ func TestEliminateFallbackHonoursVerifyLimit(t *testing.T) {
 		t.Fatalf("level 1 fed %d bytes, want less than the whole input (%d)", got, len(content))
 	}
 }
+
+// TestEliminateDropsUntestedCandidatesAtTheLimit: a candidate that has shown
+// no output by UntestedLimit is dropped there instead of being carried to
+// the end of the spool. Level 1 diverges at once; level 2 buffers more than
+// the limit before it writes anything, like a libzstd job-based candidate
+// at an ultra level.
+func TestEliminateDropsUntestedCandidatesAtTheLimit(t *testing.T) {
+	f := newCountingEngine(map[int]int64{1: 1}, UntestedLimit+(1<<20))
+	content := filler(UntestedLimit + (8 << 20))
+	_, err := Eliminate(context.Background(), identityInput(t, content, true), candidates(f, 1, 2), 2)
+	if !errors.Is(err, ErrNoMatch) {
+		t.Fatalf("err %v, want ErrNoMatch", err)
+	}
+	if got := f.fedBytes(2); got > UntestedLimit+engine.FeedSize {
+		t.Fatalf("untested candidate fed %d bytes, want at most the limit %d", got, UntestedLimit)
+	}
+	if !strings.Contains(err.Error(), "untested") {
+		t.Fatalf("err %q does not say a candidate was left untested", err)
+	}
+}
+
+// TestEliminateSettlesOverUntestedCandidatesAtTheLimit: the survivor that
+// matched all the way to the limit wins once the untested candidate is
+// dropped there; the untested one does not keep the lockstep going.
+func TestEliminateSettlesOverUntestedCandidatesAtTheLimit(t *testing.T) {
+	f := newCountingEngine(map[int]int64{1: 1}, 0)
+	buffering := newCountingEngine(map[int]int64{}, UntestedLimit+(1<<20))
+	content := filler(UntestedLimit + (8 << 20))
+	cands := append(candidates(f, 1, 2), candidates(buffering, 3)...)
+	res, err := Eliminate(context.Background(), identityInput(t, content, true), cands, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Index != 1 || res.Verified {
+		t.Fatalf("res %+v, want level 2 settled on a prefix", res)
+	}
+	if got := buffering.fedBytes(3); got > UntestedLimit+engine.FeedSize {
+		t.Fatalf("untested candidate fed %d bytes, want at most the limit %d", got, UntestedLimit)
+	}
+	if got := f.fedBytes(2); got >= int64(len(content)) {
+		t.Fatalf("survivor fed %d bytes, want less than the whole input", got)
+	}
+}
+
+// TestEliminateSkipsCandidatesBufferingPastTheLimit: a candidate whose
+// engine says it buffers more than UntestedLimit before its first output
+// is never started on an input longer than that.
+func TestEliminateSkipsCandidatesBufferingPastTheLimit(t *testing.T) {
+	f := newCountingEngine(map[int]int64{1: 1}, 0)
+	content := filler(UntestedLimit + (8 << 20))
+	cands := candidates(f, 1, 2, 3)
+	cands[2].Buffered = UntestedLimit + 1
+	res, err := Eliminate(context.Background(), identityInput(t, content, true), cands, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Index != 1 {
+		t.Fatalf("res %+v, want level 2", res)
+	}
+	if got := f.fedBytes(3); got != 0 {
+		t.Fatalf("skipped candidate fed %d bytes, want none", got)
+	}
+	// On an input that ends before the limit the same candidate is in
+	// play: it would show its output at the end of the spool at the latest.
+	short := filler(1 << 20)
+	f = newCountingEngine(map[int]int64{1: 1, 2: 1}, 0)
+	cands = candidates(f, 1, 2, 3)
+	cands[2].Buffered = UntestedLimit + 1
+	res, err = Eliminate(context.Background(), identityInput(t, short, true), cands, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Index != 2 || f.fedBytes(3) == 0 {
+		t.Fatalf("res %+v (level 3 fed %d bytes), want level 3 found", res, f.fedBytes(3))
+	}
+}
+
+// TestEliminateCarriesBufferingCandidateWithinTheLimit: a candidate that
+// says it buffers less than the limit is fed until it shows output, as
+// before.
+func TestEliminateCarriesBufferingCandidateWithinTheLimit(t *testing.T) {
+	f := newCountingEngine(map[int]int64{1: 1, 2: 1}, 512<<10)
+	content := filler(4 << 20)
+	cands := candidates(f, 1, 2, 3)
+	cands[2].Buffered = 512 << 10
+	res, err := Eliminate(context.Background(), identityInput(t, content, true), cands, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Index != 2 {
+		t.Fatalf("res %+v, want level 3", res)
+	}
+}

@@ -277,8 +277,13 @@ func eliminate(ctx context.Context, in *search.Input, cands []search.Candidate, 
 	return res, nil
 }
 
+// gzipCandidates lists every engine's candidates, tier by tier: every
+// engine's tier i, in engine order, before any engine's tier i+1. The
+// tiers only order the list; the elimination runs over all of it, since a
+// likely candidate may agree with an unlikely one over a long prefix and
+// only the lockstep can tell them apart.
 func gzipCandidates(engines []engine.Engine, h *format.GzipHeader, size int64) []search.Candidate {
-	var tiers [][]search.Candidate // tiers[i] holds every engine's tier i, in engine order
+	var tiers [][]search.Candidate
 	for _, e := range engines {
 		de, ok := e.(engine.DeflateEngine)
 		if !ok {
@@ -297,6 +302,8 @@ func gzipCandidates(engines []engine.Engine, h *format.GzipHeader, size int64) [
 	return flatten(tiers)
 }
 
+// zstdCandidates is gzipCandidates for zstd engines, carrying what each
+// engine says its candidates buffer before their first output.
 func zstdCandidates(engines []engine.Engine, h *format.ZstdFrameHeader, size int64) []search.Candidate {
 	var tiers [][]search.Candidate
 	for _, e := range engines {
@@ -304,13 +311,18 @@ func zstdCandidates(engines []engine.Engine, h *format.ZstdFrameHeader, size int
 		if !ok {
 			continue
 		}
+		buffering, _ := e.(engine.ZstdBuffering)
 		for i, tier := range ze.Candidates(h, size) {
 			for len(tiers) <= i {
 				tiers = append(tiers, nil)
 			}
 			for _, p := range tier {
 				p := p
-				tiers[i] = append(tiers[i], search.Candidate{Engine: e, Zstd: &p})
+				c := search.Candidate{Engine: e, Zstd: &p}
+				if buffering != nil {
+					c.Buffered = buffering.Buffered(p, size)
+				}
+				tiers[i] = append(tiers[i], c)
 			}
 		}
 	}
