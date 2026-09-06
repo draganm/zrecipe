@@ -32,7 +32,7 @@ const (
 type candidate struct {
 	idx      int
 	w        io.WriteCloser
-	cw       *compareWriter
+	cw       *Compare
 	started  bool
 	counted  bool  // started and already counted in tried
 	pos      int64 // input fed so far
@@ -181,7 +181,7 @@ func (e *elimination) feed(c *candidate, target int64) error {
 	}
 	if !c.started {
 		c.started = true
-		c.cw = newCompareWriter(e.ctx, nil)
+		c.cw = NewCompare(e.ctx, nil)
 		w, err := newWriter(e.in, e.cands[c.idx], c.cw)
 		if err != nil {
 			return e.kill(c, err)

@@ -41,17 +41,9 @@ func Recompress(ctx context.Context, p *Params, uncompressed io.Reader, w io.Wri
 	inHash := newHasher()
 	in := &countingReader{r: io.TeeReader(uncompressed, inHash)}
 	outHash := newHasher()
-	out := &countingWriter{w: &ctxWriter{ctx: ctx, w: io.MultiWriter(w, outHash)}}
+	out := &countingWriter{w: io.MultiWriter(w, outHash)}
 
-	var err error
-	switch p.Format {
-	case FormatNone:
-		_, err = io.Copy(out, in)
-	case FormatGzip:
-		err = recompressGzip(p, in, out, &o)
-	case FormatZstd:
-		err = recompressZstd(p, in, out, &o)
-	}
+	err := rebuild(ctx, p, in, out, &o)
 	if err != nil {
 		// The engine may have failed because the input does not match
 		// Params rather than because of a genuine engine problem (a
@@ -71,6 +63,28 @@ func Recompress(ctx context.Context, p *Params, uncompressed io.Reader, w io.Wri
 		return fmt.Errorf("%w: output is %s/%d, params expect %s/%d", ErrDigestMismatch, got.Blake3, got.Size, p.Compressed.Blake3, p.Compressed.Size)
 	}
 	return nil
+}
+
+// rebuild writes the compressed form of in that p describes to out: the
+// gzip header, the deflate stream and the trailer; the zstd frame; the
+// bytes themselves for none. It is the pull path's body, shared by
+// Recompress and by Analysis.Confirm, so a parameter set the confirming
+// pass accepts is one Recompress reproduces by construction rather than by
+// keeping two code paths alike. Writes to out fail once ctx is done. The
+// caller checks p and fills o's defaults.
+func rebuild(ctx context.Context, p *Params, in io.Reader, out io.Writer, o *RecompressOptions) error {
+	cin := &countingReader{r: in}
+	cout := &ctxWriter{ctx: ctx, w: out}
+	switch p.Format {
+	case FormatNone:
+		_, err := io.Copy(cout, cin)
+		return err
+	case FormatGzip:
+		return recompressGzip(p, cin, cout, o)
+	case FormatZstd:
+		return recompressZstd(p, cin, cout, o)
+	}
+	return fmt.Errorf("%w: unknown format %q", ErrInvalidParams, p.Format)
 }
 
 func lookupEngine(p *Params, o *RecompressOptions) (engine.Engine, error) {

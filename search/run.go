@@ -137,7 +137,7 @@ func evaluate(ctx context.Context, in *Input, c Candidate) error {
 	if err != nil {
 		return err
 	}
-	cw := newCompareWriter(ctx, ref)
+	cw := NewCompare(ctx, ref)
 	w, err := newWriter(in, c, cw)
 	if err != nil {
 		return err

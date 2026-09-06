@@ -11,20 +11,26 @@ import (
 // ErrMismatch reports that a candidate's output differs from the reference.
 var ErrMismatch = errors.New("search: output differs from reference")
 
-// compareWriter compares everything written to it against a reference
-// reader and fails at the first difference.
-type compareWriter struct {
+// Compare is a writer that compares everything written to it against a
+// reference reader and fails with ErrMismatch at the first difference. The
+// search builds one per candidate; the confirming pass builds one over the
+// whole input.
+type Compare struct {
 	ctx context.Context
 	ref io.Reader
 	buf []byte
 	n   int64
 }
 
-func newCompareWriter(ctx context.Context, ref io.Reader) *compareWriter {
-	return &compareWriter{ctx: ctx, ref: ref}
+// NewCompare returns a Compare over ref that also fails once ctx is done.
+func NewCompare(ctx context.Context, ref io.Reader) *Compare {
+	return &Compare{ctx: ctx, ref: ref}
 }
 
-func (c *compareWriter) Write(p []byte) (int, error) {
+// Matched is the number of bytes compared equal so far.
+func (c *Compare) Matched() int64 { return c.n }
+
+func (c *Compare) Write(p []byte) (int, error) {
 	if err := c.ctx.Err(); err != nil {
 		return 0, err
 	}
@@ -51,7 +57,7 @@ func (c *compareWriter) Write(p []byte) (int, error) {
 }
 
 // AtEOF returns nil when the reference has no bytes left.
-func (c *compareWriter) AtEOF() error {
+func (c *Compare) AtEOF() error {
 	var b [1]byte
 	_, err := io.ReadFull(c.ref, b[:])
 	switch {
