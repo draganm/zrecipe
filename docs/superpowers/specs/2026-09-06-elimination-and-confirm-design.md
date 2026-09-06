@@ -100,6 +100,14 @@ is re-positioned with `Input.Payload(off)` before each slice, so nothing
 about the candidate's state depends on the reader. Between rounds a
 candidate holds its engine state.
 
+An alive candidate is *tested* once it has produced output that
+matched, and *untested* while its engine is still buffering: pigz cuts
+its first job at its block size (128 KiB by default, up to 4 MiB among
+the candidates) and pgzip fills a whole block (1 MiB by default, up to
+4 MiB) before either compresses a byte, so such a candidate cannot be
+judged before the window reaches its block. Untested candidates cost
+little (they are copying input) and are carried along until they emit.
+
 After each round:
 
 - no candidate alive: `ErrNoMatch`, carrying the first non-mismatch error
@@ -107,20 +115,20 @@ After each round:
 - a complete candidate: the first complete one in list order is the
   result, `Verified` (every other alive candidate is complete as well,
   and every dead one is a non-match);
-- one candidate alive: it is the result once it has matched a margin of
-  `FeedSize` bytes past the point where its last competitor died; when
-  the window that killed the competitor leaves it short of that, it is
-  fed to the margin (rounded up to `FeedSize`, capped at the spool's
-  size) first. If that kills it, `ErrNoMatch`;
+- exactly one candidate alive and it is tested: it is the result once it
+  has matched a margin of `FeedSize` bytes past the point where its last
+  competitor died; when the window that killed the competitor leaves it
+  short of that, it is fed to the margin (rounded up to `FeedSize`,
+  capped at the spool's size) first. If that kills it, `ErrNoMatch`;
 - otherwise the next round.
 
-The lockstep is capped at two alive candidates. At any moment, in any
-round, once more than two candidates have survived the current window
-(candidates still being fed do not count), no further candidate is
-handed out; the ones in flight finish their window, and the elimination
-falls back to `Run`, today's sequential-in-tier-order search, over the
-survivors and the candidates the round had not reached yet, in list
-order. `Run` restarts each from
+The lockstep is capped at two tested candidates. At any moment, in any
+round, once more than two tested candidates have survived the current
+window (untested ones and candidates still being fed do not count), no
+further candidate is handed out; the ones in flight finish their window,
+and the elimination falls back to `Run`, today's sequential-in-tier-order
+search, over every alive candidate and the candidates the round had not
+reached yet, in list order. `Run` restarts each from
 the beginning and returns the earliest full match, `Verified`. The cap
 bounds two things: the engine states held between rounds, and the work
 spent on inputs many candidates agree on for a long stretch (a tar that
@@ -177,7 +185,9 @@ of the spool.
   before the winner, now also paid for the candidates after it. On a
   reproducible input the winner's full recompression, today's dominant
   cost, moves to the confirming pass and is paid once.
-- Memory: at most two candidates' engine states between rounds plus
+- Memory: at most two tested candidates' engine states between rounds,
+  plus the untested ones (pigz and pgzip candidates still filling their
+  first block, each holding up to its block size of input) and
   `parallelism` in flight, and the pipe (8 × 32 KiB) during the
   confirming pass. Today's search holds `parallelism` states.
 - Disk: unchanged, the spool.
