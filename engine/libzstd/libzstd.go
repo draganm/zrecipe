@@ -30,13 +30,23 @@ func (*Engine) Name() string          { return "libzstd" }
 func (*Engine) Version() string       { return C.GoString(C.ZSTD_versionString()) }
 func (*Engine) Format() engine.Format { return engine.FormatZstd }
 
+// blockSizeMax is the block libzstd cuts its input into (ZSTD_BLOCKSIZE_MAX).
+const blockSizeMax = 128 << 10
+
 var tier1Levels = []int{3, 1, 2, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19}
 var tier2Levels = []int{20, 21, 22, -1, -2, -3, -4, -5, -6, -7}
 
 // Candidates returns two tiers. Header fields that are a direct function of
 // the parameters (checksum, content size, single segment) are copied, not
-// searched.
+// searched. A first block flushed before it was full
+// (format.ZstdFrameHeader.FlushedHead) rules libzstd out: its streaming
+// paths cut full blocks until the end of the input, so no candidate is
+// returned rather than every one dying at that block, the job-based ones
+// only after filling their first job.
 func (*Engine) Candidates(h *format.ZstdFrameHeader, _ int64) [][]engine.ZstdParams {
+	if _, flushed := h.FlushedHead(blockSizeMax); flushed {
+		return nil
+	}
 	base := engine.ZstdParams{Checksum: h.Checksum, ContentSize: h.HasContentSize, SingleSegment: h.SingleSegment}
 	pledged := []bool{true}
 	if !h.HasContentSize {

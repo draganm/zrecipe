@@ -205,6 +205,21 @@ recognise: OS byte 255 and, unless the producer set a modification time,
 an mtime of `0x886e0900` (the zero `time.Time` truncated to 32 bits),
 which the header captured in Params carries verbatim.
 
+`klauspost-zstd` reproduces `github.com/klauspost/compress/zstd`, which
+compresses the zstd layers that skopeo, podman, buildah (all through
+containers/image), BuildKit and nix2container push. Its `head` parameter
+covers a shape containers/image leaves on every layer it compresses from
+an uncompressed source: it writes the 8 bytes it peeked at to detect the
+source compression, then streams the rest through `Encoder.ReadFrom`,
+which first flushes what `Write` buffered as a block of its own. The
+frame therefore opens with a raw 8-byte block, and the engine writes
+`head` bytes, flushes once and streams on. Such a block is recognised
+from the frame itself (a raw or RLE first block, not the last one, shorter
+than the producer's block), and since no libzstd path emits one, the
+`libzstd` engine offers no candidates for those frames at all. A head
+that compresses into a compressed block, or one longer than a block, is
+not recognised.
+
 The three cgo engines are present only in binaries built with cgo enabled.
 Against the versions pinned by this repository's flake, `zlib` reports
 `1.3.2` and `libzstd` reports `1.5.7`; `klauspost-flate` and
@@ -318,10 +333,12 @@ section:
 }
 ```
 
-`window_log`, `long` and `encode_all` are omitted here because they are
-zero-valued or false; they, along with the always-present `workers`, cover
-long-distance matching mode, an explicit window size, and klauspost's
-one-shot `EncodeAll` encoding path. `end_with_data` is an addition beyond
+`window_log`, `long`, `encode_all` and `head` are omitted here because
+they are zero-valued or false; they, along with the always-present
+`workers`, cover long-distance matching mode, an explicit window size,
+klauspost's one-shot `EncodeAll` encoding path, and the prefix
+klauspost's streaming writer flushes before it streams (see the
+`klauspost-zstd` engine above). `end_with_data` is an addition beyond
 the original design. It does not record what the producer did — zrecipe
 has no way to observe that — but what the frame itself shows: whether the
 last block is non-empty (`true`) or an explicit empty block trails the data
