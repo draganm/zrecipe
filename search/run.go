@@ -20,6 +20,12 @@ type Candidate struct {
 	Engine  engine.Engine
 	Deflate *engine.DeflateParams
 	Zstd    *engine.ZstdParams
+	// Buffered is how much input the engine consumes before it produces
+	// any output, when the engine knows (libzstd's job-based path fills a
+	// whole job first); zero when it streams from its first block or the
+	// engine does not say. Eliminate does not start a candidate that could
+	// not show output within UntestedLimit.
+	Buffered int64
 }
 
 // Input describes the reference compressed stream and the spooled content.

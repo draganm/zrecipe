@@ -106,6 +106,15 @@ type ZstdEngine interface {
 	NewWriter(w io.Writer, p ZstdParams, uncompressedSize int64) (io.WriteCloser, error)
 }
 
+// ZstdBuffering is implemented by zstd engines whose writers may consume a
+// lot of input before they produce any output. Buffered reports how much
+// input a writer with parameters p takes in before its first write, or
+// zero when it streams from its first block. The search uses it to leave
+// out candidates that could not show output within its lockstep limit.
+type ZstdBuffering interface {
+	Buffered(p ZstdParams, uncompressedSize int64) int64
+}
+
 // LevelOrder returns deflate levels 0..9 ordered by likelihood given the gzip
 // XFL byte: 2 marks maximum compression, 4 marks fastest.
 func LevelOrder(xfl byte) []int {

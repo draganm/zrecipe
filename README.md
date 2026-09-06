@@ -118,6 +118,24 @@ that matches that far and diverges later is rare, and `Recompress` checks
 the output digest, so such a divergence still surfaces at rebuild time
 rather than silently. The default, zero, verifies every byte.
 
+The search advances every candidate in lockstep over growing windows of
+the content and drops each one at its first divergent byte; a lone
+survivor is settled on once it has matched a margin past its last
+competitor's death, and the confirming pass then checks it over the whole
+input. Every engine's candidates take part at once, ordered by tier (the
+likely ones first) but not separated by it, since a likely candidate may
+agree with an unlikely one over a long prefix and only the lockstep can
+tell them apart. A candidate that has shown no output by
+`search.UntestedLimit` (33 MiB of content) is dropped there, and one
+whose engine says it buffers more than that before its first write
+(`engine.ZstdBuffering`) is not started on a longer input: without that
+bound the lockstep would run every such candidate over the whole content,
+at its own level, before it could settle or give up. The candidates this
+leaves out are libzstd's job-based path at the ultra levels 20 to 22 and
+in long distance matching mode, whose first job is 64 MiB to 512 MiB, on
+inputs longer than the limit, and klauspost's one-shot paths on such
+inputs.
+
 `ReadParams` decodes and validates a `Params` document read back from JSON,
 rejecting an unknown schema version with `ErrParamsVersion` and an
 internally inconsistent document — malformed digest hex, or a `gzip`/`zstd`
@@ -219,6 +237,31 @@ than the producer's block), and since no libzstd path emits one, the
 `libzstd` engine offers no candidates for those frames at all. A head
 that compresses into a compressed block, or one longer than a block, is
 not recognised.
+
+`libzstd` covers the zstd CLI and everything else linked against
+libzstd. Its candidates are the levels whose window, for the pledged size
+or for an unknown one, is the one the frame header declares: libzstd
+writes the window descriptor from its parameters alone, so any other
+level would fail at byte six, and the engine does not offer it. The first
+tier is the single-thread path at those levels; the second adds the
+job-based path (`workers` 1: libzstd's multithreaded compressor, which
+the zstd CLI uses even with one thread, and whose output is the same for
+any thread count), the ultra and negative levels, long distance matching
+for windows of 128 MiB and up, and the other levels with the header's
+window set explicitly. libzstd's job-based compressor shows nothing until
+its first job is full, four times its window (32 MiB at level 19), and
+stopping it before then still costs that job, since freeing it waits for
+the job in flight. The engine therefore compresses the first job itself
+with libzstd's buffer-less API, chunk by chunk exactly as libzstd's job
+does, so a wrong candidate is dropped after one 512 KiB chunk; if the
+input outlasts the job, the rest goes to libzstd's own compressor, the
+first job replayed into it and its bytes for that job checked against the
+ones already written. Jobs over 32 MiB (the ultra levels, wide windows)
+and long distance matching go to libzstd's compressor from the start,
+and the engine reports their job through `engine.ZstdBuffering` so the
+search leaves them out when the job would not fit its limit. A first
+block flushed before it was full rules libzstd out altogether (see
+`klauspost-zstd`).
 
 The three cgo engines are present only in binaries built with cgo enabled.
 Against the versions pinned by this repository's flake, `zlib` reports

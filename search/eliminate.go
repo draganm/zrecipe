@@ -32,6 +32,19 @@ const (
 	// single-thread paths agree on most inputs at the lazy-matching levels,
 	// and the single-thread one compresses on one core.
 	AgreeLimit = 4 << 20
+	// UntestedLimit is how far the lockstep carries a candidate that has
+	// shown no output at all: an engine still filling a buffer it needs
+	// before it writes anything. libzstd's own job-based compressor is the
+	// largest such buffer, a job of four times the window, 32 MiB at level
+	// 19 (and 128 MiB to 512 MiB at the ultra levels, which are beyond
+	// it); a batch of slack past 32 MiB lets that job's first output
+	// surface. A candidate still untested at the limit is dropped, and one
+	// whose engine says it buffers more (Candidate.Buffered) is not
+	// started on an input longer than the limit. Without this the lockstep
+	// would run every such candidate over the whole spool, at its own
+	// level, before a survivor could settle or the elimination could give
+	// up.
+	UntestedLimit = 33 << 20
 )
 
 // candidate is one contender's state across rounds. A candidate is tested
@@ -67,6 +80,7 @@ type elimination struct {
 	lastDeath   int64
 	firstErr    error
 	tried       int
+	untested    int // candidates the limit kept from being tested
 }
 
 // Eliminate finds the earliest candidate in list order that reproduces the
@@ -79,8 +93,13 @@ type elimination struct {
 // window, or when every survivor is tested and they still agree past
 // AgreeLimit, the elimination stops and Run, the sequential search,
 // decides among the candidates still in play, so an input many candidates
-// agree on for a long stretch costs what Run costs and no more. It returns
-// ErrNoMatch when every candidate diverged.
+// agree on for a long stretch costs what Run costs and no more. A
+// candidate that has produced no output by UntestedLimit is dropped there,
+// and one whose engine says it buffers more than that (Candidate.Buffered)
+// is not started on an input longer than the limit, so the lockstep never
+// runs an engine over the whole spool just to see its first byte. It
+// returns ErrNoMatch when every candidate diverged, saying how many the
+// limit left untested.
 func Eliminate(ctx context.Context, in *Input, cands []Candidate, parallelism int) (*Result, error) {
 	if len(cands) == 0 {
 		return nil, fmt.Errorf("%w: no candidates", ErrNoMatch)
@@ -97,8 +116,15 @@ func Eliminate(ctx context.Context, in *Input, cands []Candidate, parallelism in
 		parallelism = 1
 	}
 	e := &elimination{ctx: ctx, in: in, cands: cands, parallelism: parallelism, size: in.Spool.Size()}
-	for i := range cands {
+	for i, c := range cands {
+		if min(c.Buffered, e.size) > UntestedLimit {
+			e.untested++
+			continue
+		}
 		e.alive = append(e.alive, &candidate{idx: i})
+	}
+	if len(e.alive) == 0 {
+		return nil, e.noMatch()
 	}
 	defer e.closeAll()
 	window := min(e.size, int64(FirstWindow))
@@ -109,6 +135,9 @@ func Eliminate(ctx context.Context, in *Input, cands []Candidate, parallelism in
 		}
 		if fallback {
 			return e.fallback()
+		}
+		if window >= UntestedLimit {
+			e.dropUntested()
 		}
 		if len(e.alive) == 0 {
 			return nil, e.noMatch()
@@ -148,9 +177,33 @@ func Eliminate(ctx context.Context, in *Input, cands []Candidate, parallelism in
 		// where a candidate emits costs nothing: a wrong candidate still
 		// diverges within its first block of output, and the survivor is
 		// fed no further than the last buffering candidate's block whatever
-		// the step.
+		// the step. The round that reaches UntestedLimit is where the
+		// untested are dropped, so the window stops there while any is
+		// left rather than carrying them further first.
 		window = min(e.size, window*windowGrowth)
+		if tested < len(e.alive) && window > UntestedLimit {
+			window = UntestedLimit
+		}
 	}
+}
+
+// dropUntested retires the candidates that have produced no output by the
+// window that reached UntestedLimit. They are not mismatches: nothing is
+// known about them, and nothing will be within the limit.
+func (e *elimination) dropUntested() {
+	for _, c := range e.alive {
+		if c.tested || c.dead {
+			continue
+		}
+		c.dead = true
+		c.deathPos = c.pos
+		e.untested++
+		if c.w != nil {
+			c.w.Close()
+			c.w = nil
+		}
+	}
+	e.retire()
 }
 
 // round feeds every alive candidate to window on parallelism workers, then
@@ -347,12 +400,17 @@ func (e *elimination) result(c *candidate) *Result {
 	return &Result{Index: c.idx, Candidate: e.cands[c.idx], Tried: e.tried, Verified: c.complete}
 }
 
-// noMatch is the ErrNoMatch Run would report.
+// noMatch is the ErrNoMatch Run would report, plus how many candidates
+// the limit left untested.
 func (e *elimination) noMatch() error {
-	if e.firstErr != nil {
-		return fmt.Errorf("%w: tried %d candidates; first non-mismatch error: %v", ErrNoMatch, e.tried, e.firstErr)
+	msg := fmt.Sprintf("tried %d candidates", e.tried)
+	if e.untested > 0 {
+		msg += fmt.Sprintf(" (%d untested: no output within %d bytes)", e.untested, UntestedLimit)
 	}
-	return fmt.Errorf("%w: tried %d candidates", ErrNoMatch, e.tried)
+	if e.firstErr != nil {
+		return fmt.Errorf("%w: %s; first non-mismatch error: %v", ErrNoMatch, msg, e.firstErr)
+	}
+	return fmt.Errorf("%w: %s", ErrNoMatch, msg)
 }
 
 // closeAll releases every engine still open.
