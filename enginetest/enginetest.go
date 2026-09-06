@@ -100,7 +100,7 @@ func RoundTripDeflate(t *testing.T, e engine.DeflateEngine, params []engine.Defl
 				}
 				in := &search.Input{
 					Format:           format.Gzip,
-					Payload:          func() (io.Reader, error) { return bytes.NewReader(file[len(hdr.Raw):]), nil },
+					Payload:          func(off int64) (io.Reader, error) { return bytes.NewReader(file[int64(len(hdr.Raw))+off:]), nil },
 					Concurrent:       true,
 					Trailer:          file[len(file)-8:],
 					Spool:            spool(t, f.Data),
@@ -141,7 +141,7 @@ func RoundTripZstd(t *testing.T, e engine.ZstdEngine, params []engine.ZstdParams
 				}
 				in := &search.Input{
 					Format:           format.Zstd,
-					Payload:          func() (io.Reader, error) { return bytes.NewReader(file), nil },
+					Payload:          func(off int64) (io.Reader, error) { return bytes.NewReader(file[off:]), nil },
 					Concurrent:       true,
 					Spool:            spool(t, f.Data),
 					UncompressedSize: int64(len(f.Data)),

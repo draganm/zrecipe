@@ -26,8 +26,11 @@ type Candidate struct {
 type Input struct {
 	Format format.Format
 	// Payload returns a fresh reader over the compressed bytes that follow
-	// the header, up to the end of the input.
-	Payload func() (io.Reader, error)
+	// the header, positioned off bytes into them and running to the end of
+	// the input. The elimination re-positions a candidate's reference this
+	// way at every window, so a shared seek-only reader works as well as an
+	// io.ReaderAt.
+	Payload func(off int64) (io.Reader, error)
 	// Concurrent reports whether Payload may be called from several
 	// goroutines at once. When false the search is sequential.
 	Concurrent bool
@@ -42,6 +45,10 @@ type Result struct {
 	Index     int
 	Candidate Candidate
 	Tried     int
+	// Verified reports that the candidate reproduced the whole input: always
+	// true from Run; Eliminate settles most inputs on a prefix and leaves it
+	// false then.
+	Verified bool
 }
 
 // Run evaluates candidates in order and returns the earliest one that
@@ -120,34 +127,18 @@ func Run(ctx context.Context, in *Input, cands []Candidate, parallelism int) (*R
 		}
 		return nil, fmt.Errorf("%w: tried %d candidates", ErrNoMatch, tried)
 	}
-	return &Result{Index: winner, Candidate: cands[winner], Tried: tried}, nil
+	return &Result{Index: winner, Candidate: cands[winner], Tried: tried, Verified: true}, nil
 }
 
 // evaluate re-compresses the spool with one candidate and compares the
 // output against the reference. It returns nil on an exact match.
 func evaluate(ctx context.Context, in *Input, c Candidate) error {
-	ref, err := in.Payload()
+	ref, err := in.Payload(0)
 	if err != nil {
 		return err
 	}
 	cw := newCompareWriter(ctx, ref)
-	var w io.WriteCloser
-	switch in.Format {
-	case format.Gzip:
-		e, ok := c.Engine.(engine.DeflateEngine)
-		if !ok || c.Deflate == nil {
-			return fmt.Errorf("search: %s is not a deflate candidate", c.Engine.Name())
-		}
-		w, err = e.NewWriter(cw, *c.Deflate)
-	case format.Zstd:
-		e, ok := c.Engine.(engine.ZstdEngine)
-		if !ok || c.Zstd == nil {
-			return fmt.Errorf("search: %s is not a zstd candidate", c.Engine.Name())
-		}
-		w, err = e.NewWriter(cw, *c.Zstd, in.UncompressedSize)
-	default:
-		return fmt.Errorf("search: unsupported format %q", in.Format)
-	}
+	w, err := newWriter(in, c, cw)
 	if err != nil {
 		return err
 	}
@@ -167,4 +158,24 @@ func evaluate(ctx context.Context, in *Input, c Candidate) error {
 		}
 	}
 	return cw.AtEOF()
+}
+
+// newWriter opens c's engine writer over out for the input's format.
+func newWriter(in *Input, c Candidate, out io.Writer) (io.WriteCloser, error) {
+	switch in.Format {
+	case format.Gzip:
+		e, ok := c.Engine.(engine.DeflateEngine)
+		if !ok || c.Deflate == nil {
+			return nil, fmt.Errorf("search: %s is not a deflate candidate", c.Engine.Name())
+		}
+		return e.NewWriter(out, *c.Deflate)
+	case format.Zstd:
+		e, ok := c.Engine.(engine.ZstdEngine)
+		if !ok || c.Zstd == nil {
+			return nil, fmt.Errorf("search: %s is not a zstd candidate", c.Engine.Name())
+		}
+		return e.NewWriter(out, *c.Zstd, in.UncompressedSize)
+	default:
+		return nil, fmt.Errorf("search: unsupported format %q", in.Format)
+	}
 }

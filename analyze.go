@@ -92,14 +92,16 @@ func analyzeNone(r io.Reader, o *Options) (*Params, error) {
 	return &Params{Version: ParamsVersion, Format: FormatNone, Compressed: d, Uncompressed: d}, nil
 }
 
-// payloadSource returns a factory for readers over r from off to size, and
-// whether those readers may be used concurrently.
-func payloadSource(r io.ReadSeeker, off, size int64) (func() (io.Reader, error), bool) {
+// payloadSource returns a factory for readers over r from base+off to size,
+// and whether those readers may be used concurrently.
+func payloadSource(r io.ReadSeeker, base, size int64) (func(off int64) (io.Reader, error), bool) {
 	if ra, ok := r.(io.ReaderAt); ok {
-		return func() (io.Reader, error) { return io.NewSectionReader(ra, off, size-off), nil }, true
+		return func(off int64) (io.Reader, error) {
+			return io.NewSectionReader(ra, base+off, size-base-off), nil
+		}, true
 	}
-	return func() (io.Reader, error) {
-		if _, err := r.Seek(off, io.SeekStart); err != nil {
+	return func(off int64) (io.Reader, error) {
+		if _, err := r.Seek(base+off, io.SeekStart); err != nil {
 			return nil, err
 		}
 		return r, nil
