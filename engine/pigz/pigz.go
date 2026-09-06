@@ -157,7 +157,7 @@ func (e *Engine) NewWriter(w io.Writer, p engine.DeflateParams) (io.WriteCloser,
 	if block < dictSize>>10 || block > maxBlockKiB {
 		return nil, fmt.Errorf("pigz: block_size %d KiB out of range %d..%d", block, dictSize>>10, maxBlockKiB)
 	}
-	c, err := newCompressor(w, C.int(p.Level), st, block<<10, !p.Independent, p.Rsyncable)
+	c, err := newCompressor(w, p.Level, st, block<<10, !p.Independent, p.Rsyncable)
 	if err != nil {
 		return nil, err
 	}
@@ -249,10 +249,23 @@ func readn(r io.Reader, buf []byte) (int, error) {
 	return n, err
 }
 
+// streamChunk is how much output space a deflate call gets while a job
+// streams to the destination (see compressor.stream). zlib closes a
+// deflate block every 16K symbols at pigz's memLevel, which is at most
+// about this much output, so the destination sees each block about as soon
+// as it is complete.
+const streamChunk = 16 << 10
+
 // compressor holds the zlib stream and the C buffers behind it.
 type compressor struct {
-	w        io.Writer
-	level    C.int
+	w io.Writer
+	// stream is set while the job being compressed is the first one, whose
+	// output goes to the destination as deflate produces it: it is how much
+	// output space each deflate call gets, so that the call returns and
+	// what it produced is written every stream bytes rather than once the
+	// whole piece is compressed. Zero hands deflate all the space there is.
+	stream   int
+	level    int
 	strategy C.int
 	block    int // bytes
 	setdict  bool
@@ -265,7 +278,7 @@ type compressor struct {
 	coutCap int
 }
 
-func newCompressor(w io.Writer, level, strategy C.int, block int, setdict, rsync bool) (*compressor, error) {
+func newCompressor(w io.Writer, level int, strategy C.int, block int, setdict, rsync bool) (*compressor, error) {
 	strm := (*C.z_stream)(C.calloc(1, C.size_t(unsafe.Sizeof(C.z_stream{}))))
 	if strm == nil {
 		return nil, errors.New("pigz: out of memory")
@@ -323,12 +336,26 @@ func (c *compressor) deflateOut(flush C.int, room int) (int, error) {
 
 // engine is deflate_engine: run deflate into a job's output space, growing
 // the space when it fills, until deflate has nothing more to write.
+//
+// A streaming job (see compressor.stream) hands deflate its space a chunk
+// at a time, so that each call returns, and what it produced is written,
+// as soon as the chunk fills instead of once the whole piece is
+// compressed. Deflate's bit stream does not depend on how much output
+// space a call gets, only the space as a whole decides when it grows, so
+// the bytes are the ones the buffered job would produce. Level 0 is left
+// alone, since zlib sizes its stored blocks by the space it is given, and
+// so are the sync and full flushes: they come after the compressing call,
+// write a marker of a few bytes, and zlib repeats the marker when the
+// space runs out right as it is written.
 func (c *compressor) engine(out *outSpace, flush C.int) error {
 	for {
 		room := out.size - out.n
 		if room == 0 {
 			out.size = grow(out.size)
 			room = out.size - out.n
+		}
+		if c.stream != 0 && room > c.stream && c.level != 0 && (flush == C.Z_BLOCK || flush == C.Z_FINISH) {
+			room = c.stream
 		}
 		avail, err := c.deflateOut(flush, room)
 		if err != nil {
@@ -379,13 +406,15 @@ func (c *compressor) endPiece(run func(flush C.int) error, more bool, afterPrime
 // job is one of parallel_compress's jobs: a block of input, the dictionary
 // it is primed with, the rsync cut points within it and whether more input
 // follows. The worker that compresses it leaves the output and any error
-// behind and closes done.
+// behind and closes done. The first job is direct: its output goes to the
+// destination as it is produced and out stays empty.
 type job struct {
 	curr    *space
 	lens    []int
 	hasLens bool
 	dict    *space
 	more    bool
+	direct  bool
 	out     bytes.Buffer
 	err     error
 	done    chan struct{}
@@ -401,15 +430,18 @@ var errStopped = errors.New("pigz: stopped")
 // job order. A job is compressed from nothing but its own input and
 // dictionary, so the output does not depend on how jobs are scheduled.
 //
-// The first job runs alone, and the other workers are created only once
-// its output has been accepted: the candidate search feeds hundreds of
+// The first job runs alone, its output goes straight to the destination as
+// deflate produces it, and the other workers are created only once that
+// output has been accepted: the candidate search feeds hundreds of
 // parameter sets through here and rejects most of them at their first
-// block, and a rejected candidate must cost one job, not one per worker.
+// bytes of output, so a rejected candidate costs the deflate block those
+// bytes are in, not the whole first job (4 MiB at the largest block size)
+// and not one job per worker.
 func (c *compressor) parallel(r io.Reader, workers int) error {
 	if workers < 1 {
 		workers = 1
 	}
-	out := c.w // c itself is worker 0 and writes into job buffers from here
+	out := c.w // c itself is worker 0; where it writes is set per job from here
 	// jobs is unbuffered so that only the jobs being compressed are in
 	// flight: once the output fails, what is left to finish is one job per
 	// worker rather than a queue of them.
@@ -430,7 +462,14 @@ func (c *compressor) parallel(r io.Reader, workers int) error {
 				case <-stop:
 					// The output has failed; nothing more is written.
 				default:
-					s.w = &j.out
+					// Nothing else writes to the destination while the
+					// direct job is compressed: the other workers do not
+					// exist yet and the writer is waiting for this job.
+					if j.direct {
+						s.w, s.stream = out, streamChunk
+					} else {
+						s.w, s.stream = &j.out, 0
+					}
 					j.err = s.compressJob(j.curr, j.lens, j.hasLens, j.dict, j.more)
 				}
 				close(j.done)
@@ -447,7 +486,9 @@ func (c *compressor) parallel(r io.Reader, workers int) error {
 			if err != nil {
 				continue
 			}
-			if err = j.err; err == nil {
+			// A direct job's output is already at the destination, and a
+			// write error there is its err.
+			if err = j.err; err == nil && !j.direct {
 				_, err = out.Write(j.out.Bytes())
 			}
 			if err != nil {
@@ -487,6 +528,7 @@ func (c *compressor) parallel(r io.Reader, workers int) error {
 				start(s)
 			}
 		}
+		j.direct = cut == 0
 		cut++
 		j.done = make(chan struct{})
 		select {
@@ -649,7 +691,7 @@ func (c *compressor) cutJobs(r io.Reader, emit func(*job) error) error {
 // compressJob is the per-job part of compress_thread.
 func (c *compressor) compressJob(curr *space, lens []int, hasLens bool, dict *space, more bool) error {
 	C.deflateReset(c.strm)
-	C.deflateParams(c.strm, c.level, c.strategy)
+	C.deflateParams(c.strm, C.int(c.level), c.strategy)
 	if dict != nil {
 		l := dict.n
 		if l > dictSize {
@@ -708,7 +750,7 @@ func (c *compressor) single(r io.Reader) error {
 	}
 
 	C.deflateReset(c.strm)
-	C.deflateParams(c.strm, c.level, c.strategy)
+	C.deflateParams(c.strm, C.int(c.level), c.strategy)
 
 	got := 0 // amount of data in in
 	more, err := readn(r, next[:c.block])

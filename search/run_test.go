@@ -61,7 +61,7 @@ func input(t *testing.T, content []byte, level int, concurrent bool) *Input {
 	t.Cleanup(func() { sp.Close() })
 	return &Input{
 		Format:           format.Gzip,
-		Payload:          func() (io.Reader, error) { return bytes.NewReader(ref), nil },
+		Payload:          func(off int64) (io.Reader, error) { return bytes.NewReader(ref[off:]), nil },
 		Concurrent:       concurrent,
 		Trailer:          []byte("TRAILER"),
 		Spool:            sp,
@@ -249,5 +249,13 @@ func TestRunNoMatchIncludesNonMismatchError(t *testing.T) {
 	}
 	if strings.Contains(msg, context.Canceled.Error()) {
 		t.Fatalf("message should not include cancellation details: %q", msg)
+	}
+}
+
+func TestRunResultIsVerified(t *testing.T) {
+	e := &fakeDeflate{}
+	res, err := Run(context.Background(), input(t, []byte("content"), 3, true), candidates(e, 1, 3), 1)
+	if err != nil || !res.Verified {
+		t.Fatalf("res %+v err %v", res, err)
 	}
 }

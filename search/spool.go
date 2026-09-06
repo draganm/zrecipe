@@ -74,6 +74,16 @@ func (s *Spool) Reader() io.Reader {
 	return io.NewSectionReader(s.file, 0, s.size)
 }
 
+// Section returns a reader over n bytes of the content starting at off.
+// Sections are independent and may be used concurrently; the caller keeps
+// off+n within Size.
+func (s *Spool) Section(off, n int64) io.Reader {
+	if s.file == nil {
+		return bytes.NewReader(s.buf[off : off+n])
+	}
+	return io.NewSectionReader(s.file, off, n)
+}
+
 // Close releases the memory or file backing the spool.
 func (s *Spool) Close() error {
 	s.buf = nil

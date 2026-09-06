@@ -85,6 +85,31 @@ decompressed content to a temp file once they exceed `Options.MaxInMemory`
 `TestLargeInput` in this package exercises a 2 GiB input and stays well
 under that bound (see Testing below).
 
+`Analyze` recompresses the input once. It is `Start`, `Confirm` and
+`Close`, which a caller that also wants the decompressed content can drive
+itself:
+
+```go
+a, err := zrecipe.Start(ctx, in, nil) // pass one, then the engine search
+// ...
+defer a.Close()
+
+// Confirm reads the content once, writes it to the tee (nil to skip), and
+// rebuilds the input from it to prove the parameters through the same code
+// Recompress uses. It returns the same Params Analyze would.
+params, err := a.Confirm(ctx, uncompressed)
+```
+
+`Start` decompresses the input once and narrows the candidates to one by
+feeding them a growing prefix and dropping each at its first divergent
+byte; `Confirm` then reproduces the input from the content in a single
+pass while handing that content to the tee, so a caller that decomposes or
+stores the content pays for one decompression and one recompression, not
+two of each. `Options.Uncompressed` is the tee `Analyze` passes to
+`Confirm`, so it receives the content during the confirming pass, not the
+first pass: an input that is not reproducible writes nothing to it, and one
+whose confirmation fails writes a prefix.
+
 `ReadParams` decodes and validates a `Params` document read back from JSON,
 rejecting an unknown schema version with `ErrParamsVersion` and an
 internally inconsistent document — malformed digest hex, or a `gzip`/`zstd`

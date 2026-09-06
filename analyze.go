@@ -32,8 +32,11 @@ type Options struct {
 	// Parallelism is the number of candidates evaluated at once. Default
 	// runtime.NumCPU(). Takes effect only when r implements io.ReaderAt.
 	Parallelism int
-	// Uncompressed, if set, receives the decompressed content during the
-	// first pass.
+	// Uncompressed, if set, receives the decompressed content while
+	// Analyze confirms the parameters it found (the confirming pass, see
+	// Analysis.Confirm), in order and in engine.FeedSize writes. An input
+	// that is not reproducible writes nothing to it; one whose confirmation
+	// fails writes a prefix.
 	Uncompressed io.Writer
 	// Engines to search. Default DefaultEngines().
 	Engines []engine.Engine
@@ -60,46 +63,58 @@ func (o *Options) withDefaults() *Options {
 }
 
 // Analyze detects the format of r, decompresses it once while hashing both
-// streams, and searches for an engine and parameters that reproduce r
-// exactly. For an uncompressed input it returns Params with FormatNone.
+// streams, finds an engine and parameters that reproduce r exactly and
+// confirms them through the pull path: it is Start, Confirm with
+// Options.Uncompressed as the tee, and Close. For an uncompressed input it
+// returns Params with FormatNone.
 func Analyze(ctx context.Context, r io.ReadSeeker, opts *Options) (*Params, error) {
 	o := opts.withDefaults()
-	f, err := format.Detect(r)
+	a, err := Start(ctx, r, o)
 	if err != nil {
 		return nil, err
 	}
-	switch f {
-	case FormatGzip:
-		return analyzeGzip(ctx, r, o)
-	case FormatZstd:
-		return analyzeZstd(ctx, r, o)
-	default:
-		return analyzeNone(r, o)
-	}
+	defer a.Close()
+	return a.Confirm(ctx, o.Uncompressed)
 }
 
-func analyzeNone(r io.Reader, o *Options) (*Params, error) {
-	h := newHasher()
-	w := io.Writer(h)
-	if o.Uncompressed != nil {
-		w = io.MultiWriter(h, o.Uncompressed)
-	}
-	n, err := io.Copy(w, r)
-	if err != nil {
-		return nil, err
-	}
-	d := digestOf(h, n)
-	return &Params{Version: ParamsVersion, Format: FormatNone, Compressed: d, Uncompressed: d}, nil
+// passOne is what the first pass over a compressed input leaves for the
+// elimination: the spool, the search input and its candidates, the number
+// of compressed bytes, and the Params with everything but the engine
+// filled in.
+type passOne struct {
+	spool  *search.Spool
+	in     *search.Input
+	cands  []search.Candidate
+	size   int64
+	params *Params
 }
 
-// payloadSource returns a factory for readers over r from off to size, and
-// whether those readers may be used concurrently.
-func payloadSource(r io.ReadSeeker, off, size int64) (func() (io.Reader, error), bool) {
+// withCandidate completes the Params for c.
+func (p *passOne) withCandidate(c search.Candidate) *Params {
+	out := *p.params
+	out.Engine = c.Engine.Name()
+	out.EngineVersion = c.Engine.Version()
+	if c.Deflate != nil {
+		g := *p.params.Gzip
+		g.DeflateParams = *c.Deflate
+		out.Gzip = &g
+	}
+	if c.Zstd != nil {
+		out.Zstd = c.Zstd
+	}
+	return &out
+}
+
+// payloadSource returns a factory for readers over r from base+off to size,
+// and whether those readers may be used concurrently.
+func payloadSource(r io.ReadSeeker, base, size int64) (func(off int64) (io.Reader, error), bool) {
 	if ra, ok := r.(io.ReaderAt); ok {
-		return func() (io.Reader, error) { return io.NewSectionReader(ra, off, size-off), nil }, true
+		return func(off int64) (io.Reader, error) {
+			return io.NewSectionReader(ra, base+off, size-base-off), nil
+		}, true
 	}
-	return func() (io.Reader, error) {
-		if _, err := r.Seek(off, io.SeekStart); err != nil {
+	return func(off int64) (io.Reader, error) {
+		if _, err := r.Seek(base+off, io.SeekStart); err != nil {
 			return nil, err
 		}
 		return r, nil
@@ -107,18 +122,18 @@ func payloadSource(r io.ReadSeeker, off, size int64) (func() (io.Reader, error),
 }
 
 // spoolWriters builds the fan-out for the decompressed stream, wrapped so
-// writes observe ctx: pass 1 has no other point where cancellation is
-// checked, so without this a cancelled Analyze would still run to
+// writes observe ctx: pass one has no other point where cancellation is
+// checked, so without this a cancelled Start would still run to
 // completion decompressing and hashing the whole input.
-func spoolWriters(ctx context.Context, o *Options, sp *search.Spool, extra ...io.Writer) io.Writer {
+func spoolWriters(ctx context.Context, sp *search.Spool, extra ...io.Writer) io.Writer {
 	ws := append([]io.Writer{sp}, extra...)
-	if o.Uncompressed != nil {
-		ws = append(ws, o.Uncompressed)
-	}
 	return &ctxWriter{ctx: ctx, w: io.MultiWriter(ws...)}
 }
 
-func analyzeGzip(ctx context.Context, r io.ReadSeeker, o *Options) (*Params, error) {
+// passOneGzip inflates r once into a spool, hashing both streams and
+// checking the member's trailer, and lists the deflate candidates. The
+// spool is the caller's to close on success.
+func passOneGzip(ctx context.Context, r io.ReadSeeker, o *Options) (_ *passOne, err error) {
 	compHash := newHasher()
 	cr := &countingReader{r: io.TeeReader(r, compHash)}
 	br := bufio.NewReaderSize(cr, 64<<10)
@@ -127,11 +142,15 @@ func analyzeGzip(ctx context.Context, r io.ReadSeeker, o *Options) (*Params, err
 		return nil, fmt.Errorf("%w: %v", ErrCorrupt, err)
 	}
 	sp := search.NewSpool(o.TempDir, o.MaxInMemory)
-	defer sp.Close()
+	defer func() {
+		if err != nil {
+			sp.Close()
+		}
+	}()
 	uncHash := newHasher()
 	crc := crc32.NewIEEE()
 	fr := flate.NewReader(br)
-	n, err := io.Copy(spoolWriters(ctx, o, sp, uncHash, crc), fr)
+	n, err := io.Copy(spoolWriters(ctx, sp, uncHash, crc), fr)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
@@ -155,22 +174,23 @@ func analyzeGzip(ctx context.Context, r io.ReadSeeker, o *Options) (*Params, err
 	}
 	in := &search.Input{Format: FormatGzip, Trailer: trailer[:], Spool: sp, UncompressedSize: n}
 	in.Payload, in.Concurrent = payloadSource(r, int64(len(hdr.Raw)), cr.n)
-	res, err := runSearch(ctx, in, gzipCandidates(o.Engines, hdr, n), o.Parallelism)
-	if err != nil {
-		return nil, err
-	}
-	return &Params{
-		Version:       ParamsVersion,
-		Format:        FormatGzip,
-		Compressed:    digestOf(compHash, cr.n),
-		Uncompressed:  digestOf(uncHash, n),
-		Engine:        res.Candidate.Engine.Name(),
-		EngineVersion: res.Candidate.Engine.Version(),
-		Gzip:          &GzipParams{HeaderB64: base64.StdEncoding.EncodeToString(hdr.Raw), DeflateParams: *res.Candidate.Deflate},
+	return &passOne{
+		spool: sp,
+		in:    in,
+		cands: gzipCandidates(o.Engines, hdr, n),
+		size:  cr.n,
+		params: &Params{
+			Version:      ParamsVersion,
+			Format:       FormatGzip,
+			Compressed:   digestOf(compHash, cr.n),
+			Uncompressed: digestOf(uncHash, n),
+			Gzip:         &GzipParams{HeaderB64: base64.StdEncoding.EncodeToString(hdr.Raw)},
+		},
 	}, nil
 }
 
-func analyzeZstd(ctx context.Context, r io.ReadSeeker, o *Options) (*Params, error) {
+// passOneZstd is passOneGzip for a zstd frame.
+func passOneZstd(ctx context.Context, r io.ReadSeeker, o *Options) (_ *passOne, err error) {
 	// Pass 0: find the frame extent without decoding so the decoder can be
 	// bounded to exactly one frame.
 	hdr, frameLen, err := format.ZstdFrameLength(bufio.NewReaderSize(r, 64<<10))
@@ -195,9 +215,13 @@ func analyzeZstd(ctx context.Context, r io.ReadSeeker, o *Options) (*Params, err
 	}
 	defer dec.Close()
 	sp := search.NewSpool(o.TempDir, o.MaxInMemory)
-	defer sp.Close()
+	defer func() {
+		if err != nil {
+			sp.Close()
+		}
+	}()
 	uncHash := newHasher()
-	n, err := io.Copy(spoolWriters(ctx, o, sp, uncHash), dec)
+	n, err := io.Copy(spoolWriters(ctx, sp, uncHash), dec)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
@@ -216,23 +240,24 @@ func analyzeZstd(ctx context.Context, r io.ReadSeeker, o *Options) (*Params, err
 	}
 	in := &search.Input{Format: FormatZstd, Spool: sp, UncompressedSize: n}
 	in.Payload, in.Concurrent = payloadSource(r, 0, cr.n)
-	res, err := runSearch(ctx, in, zstdCandidates(o.Engines, hdr, n), o.Parallelism)
-	if err != nil {
-		return nil, err
-	}
-	return &Params{
-		Version:       ParamsVersion,
-		Format:        FormatZstd,
-		Compressed:    digestOf(compHash, cr.n),
-		Uncompressed:  digestOf(uncHash, n),
-		Engine:        res.Candidate.Engine.Name(),
-		EngineVersion: res.Candidate.Engine.Version(),
-		Zstd:          res.Candidate.Zstd,
+	return &passOne{
+		spool: sp,
+		in:    in,
+		cands: zstdCandidates(o.Engines, hdr, n),
+		size:  cr.n,
+		params: &Params{
+			Version:      ParamsVersion,
+			Format:       FormatZstd,
+			Compressed:   digestOf(compHash, cr.n),
+			Uncompressed: digestOf(uncHash, n),
+		},
 	}, nil
 }
 
-func runSearch(ctx context.Context, in *search.Input, cands []search.Candidate, parallelism int) (*search.Result, error) {
-	res, err := search.Run(ctx, in, cands, parallelism)
+// eliminate runs the elimination and reports no survivor as
+// ErrNotReproducible.
+func eliminate(ctx context.Context, in *search.Input, cands []search.Candidate, parallelism int) (*search.Result, error) {
+	res, err := search.Eliminate(ctx, in, cands, parallelism)
 	if err != nil {
 		if errors.Is(err, search.ErrNoMatch) {
 			return nil, fmt.Errorf("%w: %v", ErrNotReproducible, err)

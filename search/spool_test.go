@@ -64,3 +64,24 @@ func TestSpoolEmpty(t *testing.T) {
 		t.Fatal("expected empty")
 	}
 }
+
+func TestSpoolSection(t *testing.T) {
+	for _, maxMem := range []int64{1 << 20, 10} { // in memory, spilled
+		sp := NewSpool(t.TempDir(), maxMem)
+		if _, err := sp.Write([]byte("0123456789abcdef")); err != nil {
+			t.Fatal(err)
+		}
+		got, err := io.ReadAll(sp.Section(4, 6))
+		if err != nil || string(got) != "456789" {
+			t.Fatalf("maxMem %d: %q, %v", maxMem, got, err)
+		}
+		got, err = io.ReadAll(sp.Section(14, 2))
+		if err != nil || string(got) != "ef" {
+			t.Fatalf("maxMem %d: %q, %v", maxMem, got, err)
+		}
+		if sp.InMemory() != (maxMem > 16) {
+			t.Fatalf("maxMem %d: InMemory = %v", maxMem, sp.InMemory())
+		}
+		sp.Close()
+	}
+}
